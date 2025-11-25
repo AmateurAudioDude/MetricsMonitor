@@ -1,0 +1,65 @@
+/* Equalizer-Gruppe – vertikal (Titel oben, Balkenblock unten, Overlay in der Mitte) */
+.eq-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  margin-left: 5px;
+}
+
+/* Balkenblock – horizontal */
+.eq-bars {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* Mini-5-Band-EQ: etwas kleinere Balkenhöhe als Standard */
+.eq-group .level-meter .meter-bar {
+  height: 140px;
+}
+
+/* Titel über dem EQ */
+#eqTitle {
+  text-align: center;
+  font-size: 9px;
+  color: #aaa; /* gleiche Farbe wie Skala */
+  margin-bottom: 6px;
+  width: 100%;
+}
+
+/* Overlay-Hinweis "Click play to show" */
+#eqHintWrapper {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+#eqHintText {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px 10px;
+  border-radius: 4px;
+  backdrop-filter: blur(2px);
+  transition: opacity 0.3s ease;
+  z-index: 10000;
+}
+
+/* Peak-Marker allgemein */
+.peak-flag {
+  box-shadow: none !important;
+  border: 0 !important;
+  outline: none !important;
+}
+
+/* EQ-Peak nur leicht hervorheben, Farbe wird im JS gesetzt */
+.meter-bar[id^="eq"] .segment.peak-flag {
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
+}

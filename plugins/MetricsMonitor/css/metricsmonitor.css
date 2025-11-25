@@ -1,0 +1,36 @@
+/* --- LOADER / BASE LAYOUT ------------------------------- */
+
+/* Mobile layout adjustments (tablets/phones) */
+@media (max-width: 768px) {
+  #signalPanel {
+    margin-top: 0px !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+    padding-left: 0px;
+    padding-right: 0px;
+  }
+}
+
+/* Main panel that holds header + meters/EQ/Analyzer */
+#signalPanel {
+  display: flex;
+  justify-content: flex-start;
+  flex-direction: column;
+  padding: 10px;
+  min-height: 235px;
+  height: 235px;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: -88px;       /* vertical offset (pulled upwards) */
+  overflow: hidden;
+}
+
+/* Container for the dynamic content (Meters / EQ / Analyzer) */
+#level-meter-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  width: 100%;
+}
