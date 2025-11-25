@@ -1,4 +1,4 @@
-//////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
 ///                                                          ///
 ///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.0) ///
 ///                                                          ///
@@ -12,22 +12,26 @@
   const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
   const stereoBoost = 1;       // Do not touch - this value is automatically updated via the config file
   const eqBoost = 1;           // Do not touch - this value is automatically updated via the config file
-  const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automatically updated via the config file
+  const MODULE_SEQUENCE = [1, 2, 0]; // Do not touch - this value is automatically updated via the config file
 
   // ---------------------------------------------------------
   // Plugin version + update check configuration
   // ---------------------------------------------------------
 
-  const plugin_version = '1.1';   // MetricsMonitor client version (adjust when you release a new version)
-  const updateInfo      = true;    // Enable or disable GitHub version check
+  const plugin_version = '1.0'; // MetricsMonitor client version (adjust when you release a new version)
+  const updateInfo     = true;  // Enable or disable GitHub version check
 
-  const plugin_name     = 'MetricsMonitor';
-  const plugin_path     = 'https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/';
+  const plugin_name = 'MetricsMonitor';
+  const plugin_path = 'https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/';
   // Path of THIS file inside the GitHub repo (adjust if needed)
-  const plugin_JSfile   = 'main/plugins/MetricsMonitor/metricsmonitor.js';
+  const plugin_JSfile = 'main/plugins/MetricsMonitor/metricsmonitor.js';
 
-  // LocalStorage key → one update notification per day
-  const PluginUpdateKey = `${plugin_name}_lastUpdateNotification`;
+  // Mappings for generic /setup update checker
+  const CHECK_FOR_UPDATES     = updateInfo;              // reuse existing flag
+  const pluginSetupOnlyNotify = true;                    // only show DOM-signals in /setup
+  const pluginName            = plugin_name;
+  const pluginHomepageUrl     = 'https://github.com/Highpoint2000/MetricsMonitor/releases';
+  const pluginUpdateUrl       = plugin_path + plugin_JSfile;
 
   ///////////////////////////////////////////////////////////////
 
@@ -385,10 +389,20 @@
     // --- METER CONTAINER ---
     const meters = document.createElement("div");
     meters.id = "level-meter-container";
+
     // Initial state: visible, transition is set in switchModeWithFade
     meters.style.opacity = "1";
     meters.style.marginTop = "25px";
     meters.style.width = "102%";
+    meters.style.cursor = "pointer";
+
+    // Tooltip class (uses your existing data-tooltip system)
+    meters.classList.add("tooltip");
+
+    // Tooltip text
+    meters.setAttribute("data-tooltip", "Click to switch display mode");
+
+    // Append container
     panel.appendChild(meters);
 
     // Build the initial mode from ACTIVE_SEQUENCE/START_INDEX (no fade)
@@ -432,111 +446,146 @@
 
 
   // ---------------------------------------------------------
-  // Version check helper functions (GitHub)
+  // Function for update notification in /setup
   // ---------------------------------------------------------
+  function checkUpdate(setupOnly, pluginName, urlUpdateLink, urlFetchLink) {
+    const rawPath = window.location.pathname || "/";
+    // Normalize: remove trailing slashes
+    const path = rawPath.replace(/\/+$/, "") || "/";
+    const isSetupPath =
+      path === "/setup" ||
+      path.endsWith("/setup.php");
 
-  // Only show one update notification per day
-  function shouldShowNotification() {
-    try {
-      const lastNotificationDate = localStorage.getItem(PluginUpdateKey);
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    console.log(
+      `[${pluginName}] checkUpdate called: path="${rawPath}", normalized="${path}", setupOnly=${setupOnly}, isSetupPath=${isSetupPath}`
+    );
 
-      if (lastNotificationDate === today) {
-        return false;
-      }
-      localStorage.setItem(PluginUpdateKey, today);
-      return true;
-    } catch (e) {
-      console.warn(`[${plugin_name}] localStorage not available for update check`, e);
-      return true; // fall back: allow notification
-    }
-  }
+    // If setupOnly is true, we still perform the FETCH (für Console-Info),
+    // aber DOM-Manipulation nur auf /setup.
+    // → kein vorzeitiges return hier!
 
-  // Compare versions like "1.0", "2.6b", "3.5.1a", …
-  function compareVersions(local, remote) {
-    const parseVersion = (version) =>
-      String(version)
-        .split(/(\d+|[a-z]+)/i)
-        .filter(Boolean)
-        .map((part) => (isNaN(part) ? part : parseInt(part, 10)));
+    // Detect current plugin version from different possible globals
+    let pluginVersionCheck =
+      typeof pluginVersion   !== "undefined" ? pluginVersion   :
+      typeof plugin_version  !== "undefined" ? plugin_version  :
+      typeof PLUGIN_VERSION  !== "undefined" ? PLUGIN_VERSION  :
+      "Unknown";
 
-    const localParts  = parseVersion(local);
-    const remoteParts = parseVersion(remote);
+    console.log(`[${pluginName}] Local plugin version detected: ${pluginVersionCheck}`);
 
-    for (let i = 0; i < Math.max(localParts.length, remoteParts.length); i++) {
-      const localPart  = localParts[i]  ?? 0;
-      const remotePart = remoteParts[i] ?? 0;
+    // Inner async function to fetch and detect remote version
+    async function fetchFirstLine() {
+      const urlCheckForUpdate = urlFetchLink;
 
-      if (typeof localPart === 'number' && typeof remotePart === 'number') {
-        if (localPart > remotePart) return 1;
-        if (localPart < remotePart) return -1;
-      } else if (typeof localPart === 'string' && typeof remotePart === 'string') {
-        if (localPart > remotePart) return 1;
-        if (localPart < remotePart) return -1;
-      } else {
-        // Numeric parts are "less than" string parts (e.g., 3.5 < 3.5a)
-        return typeof localPart === 'number' ? -1 : 1;
-      }
-    }
-
-    return 0; // equal
-  }
-
-  // Fetch remote script from GitHub and compare plugin_version
-  function checkplugin_version() {
-    if (!updateInfo) return;
-
-    const remoteUrl = `${plugin_path}${plugin_JSfile}`;
-    console.log(`[${plugin_name}] Checking for updates from:`, remoteUrl);
-
-    fetch(remoteUrl)
-      .then(response => {
+      try {
+        console.log(`[${pluginName}] Fetching remote file for update check: ${urlCheckForUpdate}`);
+        const response = await fetch(urlCheckForUpdate, { cache: "no-store" });
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        return response.text();
-      })
-      .then(script => {
-        // Look for a line: const plugin_version = '...';
-        const match = script.match(/const\s+plugin_version\s*=\s*'([\d.]+[a-z]*)?';/);
-        if (!match) {
-          console.error(`${plugin_name}: Plugin version could not be found in remote script.`);
-          return;
+          throw new Error(`[${pluginName}] update check HTTP error! status: ${response.status}`);
         }
 
-        const externalVersion = match[1];
-        const comparison      = compareVersions(plugin_version, externalVersion);
+        const text = await response.text();
+        const lines = text.split("\n");
 
-        if (comparison === 1) {
-          console.log(`${plugin_name}: Local version (${plugin_version}) is newer than GitHub version (${externalVersion}).`);
-        } else if (comparison === 0) {
-          console.log(`${plugin_name}: Local version matches GitHub version (${plugin_version}).`);
-        } else if (comparison === -1) {
-          // Remote is newer
-          if (shouldShowNotification()) {
-            console.log(`${plugin_name}: Plugin update available: ${plugin_version} -> ${externalVersion}`);
+        let version;
 
-            if (typeof sendToast === 'function') {
-              // Same toast style as LiveMap
-              sendToast(
-                'warning important',
-                plugin_name,
-                `Update available:<br>${plugin_version} → ${externalVersion}`,
-                false,
-                false
-              );
-            } else {
-              // Fallback if toast function is missing
-              console.warn(
-                `${plugin_name}: sendToast() not available – update: ${plugin_version} → ${externalVersion}`
-              );
+        // Try to find a line with const pluginVersion / plugin_version / PLUGIN_VERSION
+        if (lines.length > 2) {
+          const versionLine = lines.find(line =>
+            line.includes("const pluginVersion =") ||
+            line.includes("const plugin_version =") ||
+            line.includes("const PLUGIN_VERSION =")
+          );
+
+          if (versionLine) {
+            const match = versionLine.match(
+              /const\s+(?:pluginVersion|plugin_version|PLUGIN_VERSION)\s*=\s*['"]([^'"]+)['"]/
+            );
+            if (match) {
+              version = match[1];
             }
           }
         }
-      })
-      .catch(error => {
-        console.error(`${plugin_name}: Error fetching the plugin script for version check:`, error);
-      });
+
+        // Fallback: try first line if it starts with a digit
+        if (!version) {
+          const firstLine = lines[0].trim();
+          version = /^\d/.test(firstLine) ? firstLine : "Unknown";
+        }
+
+        console.log(`[${pluginName}] Remote plugin version detected: ${version}`);
+        return version;
+      } catch (error) {
+        console.error(`[${pluginName}] error fetching file:`, error);
+        return null;
+      }
+    }
+
+    // Check for updates
+    fetchFirstLine().then(newVersion => {
+      if (!newVersion) return;
+
+      if (newVersion !== pluginVersionCheck && newVersion !== "Unknown") {
+        let updateConsoleText =
+          `There is a new version of this plugin available (${pluginVersionCheck} → ${newVersion})`;
+        console.log(`[${pluginName}] ${updateConsoleText}`);
+
+        // DOM-Update nur auf /setup, wenn gewünscht
+        if (!setupOnly || isSetupPath) {
+          setupNotify(pluginVersionCheck, newVersion, pluginName, urlUpdateLink, isSetupPath);
+        }
+      } else {
+        console.log(
+          `[${pluginName}] No update available (local=${pluginVersionCheck}, remote=${newVersion})`
+        );
+      }
+    });
+
+    // Helper that writes message into /setup and draws red dot on plugin icon
+    function setupNotify(pluginVersionCheck, newVersion, pluginName, urlUpdateLink, isSetupPath) {
+      if (!isSetupPath) {
+        console.log(`[${pluginName}] Update available, but not on /setup – DOM update skipped.`);
+        return;
+      }
+
+      const pluginSettings = document.getElementById("plugin-settings");
+      if (pluginSettings) {
+        const currentText = pluginSettings.textContent.trim();
+        const newText =
+          `<a href="${urlUpdateLink}" target="_blank">` +
+          `[${pluginName}] Update available: ${pluginVersionCheck} --> ${newVersion}</a><br>`;
+
+        if (currentText === "No plugin settings are available.") {
+          pluginSettings.innerHTML = newText;
+        } else {
+          pluginSettings.innerHTML += " " + newText;
+        }
+      } else {
+        console.warn(`[${pluginName}] #plugin-settings not found on /setup`);
+      }
+
+      // Try different selectors to find plugin icon in sidebar
+      const updateIcon =
+        document.querySelector(".wrapper-outer #navigation .sidenav-content .fa-puzzle-piece") ||
+        document.querySelector(".wrapper-outer .sidenav-content") ||
+        document.querySelector(".sidenav-content");
+
+      if (updateIcon) {
+        const redDot = document.createElement("span");
+        redDot.style.display = "block";
+        redDot.style.width = "12px";
+        redDot.style.height = "12px";
+        redDot.style.borderRadius = "50%";
+        redDot.style.backgroundColor = "#FE0830"; // or 'var(--color-main-bright)'
+        redDot.style.marginLeft = "82px";
+        redDot.style.marginTop = "-12px";
+
+        updateIcon.appendChild(redDot);
+        console.log(`[${pluginName}] Red update dot attached to plugin icon.`);
+      } else {
+        console.warn(`[${pluginName}] Could not find updateIcon element for red dot`);
+      }
+    }
   }
 
 
@@ -561,15 +610,7 @@
     // --- Analyzer ---
     loadCss("css/metricsmonitor-analyzer.css");
 
-    // Start version check (independent of module loading)
-    if (updateInfo) {
-      try {
-        checkplugin_version();
-      } catch (e) {
-        console.error("[MetricsMonitor] Version check failed:", e);
-      }
-    }
-
+    // Load all JS modules
     Promise.all([
       loadScript("js/metricsmonitor-header.js"),
       loadScript("js/metricsmonitor-meters.js"),
@@ -586,6 +627,18 @@
       .catch(err => {
         console.error("[MetricsMonitor] FATAL LOAD ERROR:", err);
       });
+  }
+
+  // ---------------------------------------------------------
+  // Trigger update check (console on all pages, DOM on /setup)
+  // ---------------------------------------------------------
+  if (CHECK_FOR_UPDATES) {
+    checkUpdate(
+      pluginSetupOnlyNotify,  // only show DOM stuff in /setup
+      pluginName,
+      pluginHomepageUrl,      // link that user can click for update
+      pluginUpdateUrl         // raw file used to detect remote version
+    );
   }
 
   if (document.readyState === "loading") {
