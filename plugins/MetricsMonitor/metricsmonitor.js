@@ -1,18 +1,33 @@
-////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////
 ///                                                          ///
 ///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.0) ///
 ///                                                          ///
-///  by Highpoint               last update: 21.11.2025      ///
+///  by Highpoint               last update: 25.11.2025      ///
 ///                                                          ///
 ///  https://github.com/Highpoint2000/metricsmonitor         ///
 ///                                                          ///
 ////////////////////////////////////////////////////////////////
 
 (() => {
-const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automatically updated via the config file
+  const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+  const stereoBoost = 1;       // Do not touch - this value is automatically updated via the config file
+  const eqBoost = 1;           // Do not touch - this value is automatically updated via the config file
+  const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automatically updated via the config file
+
+  // ---------------------------------------------------------
+  // Plugin version + update check configuration
+  // ---------------------------------------------------------
+
+  const plugin_version  = '1.0';   // MetricsMonitor client version (adjust when you release a new version)
+  const updateInfo      = true;    // Enable or disable GitHub version check
+
+  const plugin_name     = 'MetricsMonitor';
+  const plugin_path     = 'https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/';
+  // Path of THIS file inside the GitHub repo (adjust if needed)
+  const plugin_JSfile   = 'main/plugins/MetricsMonitor/metricsmonitor.js';
+
+  // LocalStorage key → one update notification per day
+  const PluginUpdateKey = `${plugin_name}_lastUpdateNotification`;
 
   ///////////////////////////////////////////////////////////////
 
@@ -190,10 +205,10 @@ const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automaticall
     //   1 = Level meters
     //   2 = Analyzer
     if (mode === 0) {
-      // Equalizer nutzt init("level-meter-container")
+      // Equalizer uses init("level-meter-container")
       window.MetricsEqualizer?.init("level-meter-container");
     } else if (mode === 1) {
-      // Meters nutzt initMeters(meters) – genau wie in deiner funktionierenden Version
+      // Meters uses initMeters(meters)
       window.MetricsMeters?.initMeters(meters);
     } else if (mode === 2) {
       window.MetricsAnalyzer?.init("level-meter-container");
@@ -255,7 +270,7 @@ const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automaticall
 
 
   // ---------------------------------------------------------
-  // Mode toggle – nur aktiv, wenn mehr als ein Modul
+  // Mode toggle – only active when more than one module
   // ---------------------------------------------------------
 
   function attachToggle() {
@@ -373,7 +388,7 @@ const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automaticall
     // Initial state: visible, transition is set in switchModeWithFade
     meters.style.opacity = "1";
     meters.style.marginTop = "25px";
-	meters.style.width = "102%";
+    meters.style.width = "102%";
     panel.appendChild(meters);
 
     // Build the initial mode from ACTIVE_SEQUENCE/START_INDEX (no fade)
@@ -417,6 +432,115 @@ const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automaticall
 
 
   // ---------------------------------------------------------
+  // Version check helper functions (GitHub)
+  // ---------------------------------------------------------
+
+  // Only show one update notification per day
+  function shouldShowNotification() {
+    try {
+      const lastNotificationDate = localStorage.getItem(PluginUpdateKey);
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+      if (lastNotificationDate === today) {
+        return false;
+      }
+      localStorage.setItem(PluginUpdateKey, today);
+      return true;
+    } catch (e) {
+      console.warn(`[${plugin_name}] localStorage not available for update check`, e);
+      return true; // fall back: allow notification
+    }
+  }
+
+  // Compare versions like "1.0", "2.6b", "3.5.1a", …
+  function compareVersions(local, remote) {
+    const parseVersion = (version) =>
+      String(version)
+        .split(/(\d+|[a-z]+)/i)
+        .filter(Boolean)
+        .map((part) => (isNaN(part) ? part : parseInt(part, 10)));
+
+    const localParts  = parseVersion(local);
+    const remoteParts = parseVersion(remote);
+
+    for (let i = 0; i < Math.max(localParts.length, remoteParts.length); i++) {
+      const localPart  = localParts[i]  ?? 0;
+      const remotePart = remoteParts[i] ?? 0;
+
+      if (typeof localPart === 'number' && typeof remotePart === 'number') {
+        if (localPart > remotePart) return 1;
+        if (localPart < remotePart) return -1;
+      } else if (typeof localPart === 'string' && typeof remotePart === 'string') {
+        if (localPart > remotePart) return 1;
+        if (localPart < remotePart) return -1;
+      } else {
+        // Numeric parts are "less than" string parts (e.g., 3.5 < 3.5a)
+        return typeof localPart === 'number' ? -1 : 1;
+      }
+    }
+
+    return 0; // equal
+  }
+
+  // Fetch remote script from GitHub and compare plugin_version
+  function checkplugin_version() {
+    if (!updateInfo) return;
+
+    const remoteUrl = `${plugin_path}${plugin_JSfile}`;
+    console.log(`[${plugin_name}] Checking for updates from:`, remoteUrl);
+
+    fetch(remoteUrl)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.text();
+      })
+      .then(script => {
+        // Look for a line: const plugin_version = '...';
+        const match = script.match(/const\s+plugin_version\s*=\s*'([\d.]+[a-z]*)?';/);
+        if (!match) {
+          console.error(`${plugin_name}: Plugin version could not be found in remote script.`);
+          return;
+        }
+
+        const externalVersion = match[1];
+        const comparison      = compareVersions(plugin_version, externalVersion);
+
+        if (comparison === 1) {
+          console.log(`${plugin_name}: Local version (${plugin_version}) is newer than GitHub version (${externalVersion}).`);
+        } else if (comparison === 0) {
+          console.log(`${plugin_name}: Local version matches GitHub version (${plugin_version}).`);
+        } else if (comparison === -1) {
+          // Remote is newer
+          if (shouldShowNotification()) {
+            console.log(`${plugin_name}: Plugin update available: ${plugin_version} -> ${externalVersion}`);
+
+            if (typeof sendToast === 'function') {
+              // Same toast style as LiveMap
+              sendToast(
+                'warning important',
+                plugin_name,
+                `Update available:<br>${plugin_version} → ${externalVersion}`,
+                false,
+                false
+              );
+            } else {
+              // Fallback if toast function is missing
+              console.warn(
+                `${plugin_name}: sendToast() not available – update: ${plugin_version} → ${externalVersion}`
+              );
+            }
+          }
+        }
+      })
+      .catch(error => {
+        console.error(`${plugin_name}: Error fetching the plugin script for version check:`, error);
+      });
+  }
+
+
+  // ---------------------------------------------------------
   // Loader bootstrap
   // ---------------------------------------------------------
 
@@ -436,6 +560,15 @@ const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automaticall
 
     // --- Analyzer ---
     loadCss("css/metricsmonitor-analyzer.css");
+
+    // Start version check (independent of module loading)
+    if (updateInfo) {
+      try {
+        checkplugin_version();
+      } catch (e) {
+        console.error("[MetricsMonitor] Version check failed:", e);
+      }
+    }
 
     Promise.all([
       loadScript("js/metricsmonitor-header.js"),
