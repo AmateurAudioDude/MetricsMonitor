@@ -39,26 +39,26 @@ After making changes to the metricsmonitor.json script, the server must be resta
 ### Input: 48 kHz Mono/Stereo
 <img width="800" height="194" alt="1a" src="https://github.com/user-attachments/assets/51504f0d-2c46-41d4-9f39-2f31b9bfbabb" />
 
-    1 – MO/ST without PILOT/MPX/RDS      2 – only spectrum to 48 kHz       0 – Mono/Stereo with Equalizer
+    1 – MO/ST without PILOT/MPX/RDS      2 – only spectrum to 48 kHz          0 – MO/ST with Equalizer
   
 ### Input: 48 kHz MPX
 
-<img width="1213" height="294" alt="2" src="https://github.com/user-attachments/assets/e0d06c50-a484-4cc0-aaa7-7b93ac55e3d4" />
+<img width="800" height="194" alt="2" src="https://github.com/user-attachments/assets/e0d06c50-a484-4cc0-aaa7-7b93ac55e3d4" />
 
-          1 – Mono without PILOT/MPX/RDS     2 – only spectrum to 48 kHz with PILOT              0 – Mono with Equalizer
+    1 – Mono without PILOT/MPX/RDS    2 – spectrum to 48 kHz with PILOT       0 – Mono with Equalizer
 
 ### Input: 96 kHz MPX
 
-<img width="1243" height="295" alt="5" src="https://github.com/user-attachments/assets/164aa43a-c2f4-4f4b-8f64-8b72b89d6264" />
+<img width="800" height="190" alt="5" src="https://github.com/user-attachments/assets/164aa43a-c2f4-4f4b-8f64-8b72b89d6264" />
 
 
-          1 – Mono without MPX/RDS                2 – only spectrum to 38 kHz with PILOT            0 – Mono with Equalizer
+       1 – Mono without MPX/RDS       2 – spectrum to 38 kHz with PILOT       0 – Mono with Equalizer
 
 ### Input: 192 kHz MPX
 
-<img width="1218" height="294" alt="4" src="https://github.com/user-attachments/assets/0f67b21d-2184-47dd-b75e-747f46815a49" />
+<img width="800" height="194" alt="4" src="https://github.com/user-attachments/assets/0f67b21d-2184-47dd-b75e-747f46815a49" />
 
-        1 – Mono with PILOT/MPX/RDS               2 – spectrum to 56 kHz with PILOT/RDS            0 – Mono with Equalizer
+     1 – Mono with PILOT/MPX/RDS    2 – spectrum to 56 kHz with PILOT/RDS     0 – Mono with Equalizer
 
 ## MPX mode
 
