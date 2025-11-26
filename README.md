@@ -3,13 +3,14 @@
 FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equalizers and spectrum analyzer for FM audio, FM baseband and MPX signal.
 
 
-<img width="1228" height="293" alt="image" src="https://github.com/user-attachments/assets/3782fefd-01e5-474a-bcd5-c4b1fc6d7be9" />
+<img width="1260" height="306" alt="start" src="https://github.com/user-attachments/assets/863202ce-d88d-46c7-9d9f-be3c52b49228" />
+
 
 ## v1.0
 
 - Three display modes: Audio + PILOT/MPX/RDS spectrum analysis / Audio + equalizer (Switching is done by clicking on the display)
 
-## Installation notes:
+## Installation notes
 
 1. [Download](https://github.com/Highpoint2000/MetricsMonitor/releases) the last repository as a zip
 2. Unpack all files (MetricsMonitorPlugin.js + MetricsMonitor Folder) to ..fm-dx-webserver-main\plugins\ 
@@ -22,7 +23,7 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 9. Stop or close the fm-dx-webserver
 10. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
 
-## Configuration options:
+## Configuration options
 
 The following variables can be changed in the metricsmonitor.json config file:
 
@@ -33,8 +34,43 @@ The following variables can be changed in the metricsmonitor.json config file:
 
 After making changes to the metricsmonitor.json script, the server must be restarted!!!
 
-## Important notes: 
+## Display modes
 
+### Input: 48 kHz Mono/Stereo
+<img width="1067" height="259" alt="1a" src="https://github.com/user-attachments/assets/51504f0d-2c46-41d4-9f39-2f31b9bfbabb" />
+
+     1 – Mono/Stereo without PILOT/MPX/RDS            2 – only spectrum to 48 kHz                0 – Mono/Stereo with Equalizer
+  
+### Input: 48 kHz MPX
+
+<img width="1213" height="294" alt="2" src="https://github.com/user-attachments/assets/e0d06c50-a484-4cc0-aaa7-7b93ac55e3d4" />
+
+          1 – Mono without PILOT/MPX/RDS         2 – only spectrum to 48 kHz with PILOT             0 – Mono with Equalizer
+
+### Input: 96 kHz MPX
+
+<img width="1243" height="295" alt="5" src="https://github.com/user-attachments/assets/164aa43a-c2f4-4f4b-8f64-8b72b89d6264" />
+
+
+          1 – Mono without MPX/RDS                2 – only spectrum to 38 kHz with PILOT            0 – Mono with Equalizer
+
+### Input: 192 kHz MPX
+
+<img width="1218" height="294" alt="4" src="https://github.com/user-attachments/assets/0f67b21d-2184-47dd-b75e-747f46815a49" />
+
+        1 – Mono with PILOT/MPX/RDS               2 – spectrum to 56 kHz with PILOT/RDS            0 – Mono with Equalizer
+
+## MPX mode
+
+### ESP32 Receiver
+Once the PE5PVB firmware is installed, enable the MPX output in the audio settings menu
+
+### Headless TEF
+If the Headless TEF has an line audio output, the MPX output can be activated via a jumper on the board
+
+## Important notes
+
+- To activate the audio output and equalizer, press the Play button!
 - The function of the modules depends on the sound input and the data rate used:
   0 = 48 kHz signal (mono or stereo) is sufficient.
   1 = Minimum 96 kHz signal is required for the pilot tone display; a 192 kHz signal is required for MPX and RDS display. For both sample rates, the receiver must support MPX output (activate via the menu if necessary).
