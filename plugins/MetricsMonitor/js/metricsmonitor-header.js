@@ -3,10 +3,11 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 96000;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
-
+
+
   ///////////////////////////////////////////////////////////////
 
   // PTY code → human-readable label mapping
@@ -34,8 +35,18 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
   }
 
   /**
-   * Handle incoming JSON messages from the WebSocket
-   * and update meters / icons / labels in the header.
+   * Handle incoming WebSocket messages for the text / status data.
+   *
+   * Expects a structure similar to:
+   * {
+   *   sig:  37.2,   // signal strength
+   *   pty:  10,     // PTY code
+   *   st:   true,   // stereo flag
+   *   ecc:  "NLD",  // ECC country code string or null
+   *   rds:  true,   // RDS present
+   *   tp:   1,      // TP bit
+   *   ta:   0       // TA bit
+   * }
    */
   function handleTextSocketMessage(message) {
     const meters = window.MetricsMeters;
@@ -66,17 +77,29 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
           ptyLabel.style.fontWeight = "normal";
         }
       }
-
-      // Background color of the signal panel depending on PTY presence
-      const panel = document.getElementById('signalPanel');
-      if (panel) {
-        if (ptyText !== "PTY") {
-          panel.style.setProperty('background-color', 'var(--color-2-transparent)', 'important');
-        } else {
-          panel.style.setProperty('background-color', 'var(--color-1-transparent)', 'important');
-        }
-      }
     }
+
+    // --- Stereo icon + Pilot level ---
+    if (message.st !== undefined) {
+      const stereoIcon = document.getElementById('stereoIcon');
+
+      // If we have a stereo flag “on”
+      if (message.st === true) {
+        // Stereo just turned on → initialize pilot level randomly
+        if (prevStereoState === false) {
+          levels.stereoPilot = Math.floor(Math.random() * (50 - 10 + 1)) + 10;
+        }
+        stereoIcon.classList.add('stereo-on');
+        stereoIcon.classList.remove('stereo-off');
+      } else {
+        // Mono → very low pilot level
+        stereoIcon.classList.add('stereo-off');
+        stereoIcon.classList.remove('stereo-on');
+        levels.stereoPilot = 3;
+      }
+      prevStereoState = message.st === true;
+    }
+    updateMeter('stereo-pilot-meter', levels.stereoPilot);
 
     // --- ECC (Extended Country Code) badge ---
     const eccWrapper = document.getElementById('eccWrapper');
@@ -106,30 +129,15 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
           noEcc.textContent = 'ECC';
           noEcc.style.color = '#696969';
           noEcc.style.fontSize = '13px';
+          noEcc.style.fontWeight = 'bold';
+          noEcc.style.border = "1px solid #696969";
+          noEcc.style.borderRadius = "3px";
+          noEcc.style.padding = "0 2px";
+          noEcc.style.lineHeight = "1.2";
           eccWrapper.appendChild(noEcc);
         }
       }
     }
-
-    // --- Stereo indicator and stereo pilot "level" ---
-    const stereoIcon = document.getElementById('stereoIcon');
-    if (stereoIcon) {
-      if (message.st === true) {
-        // Stereo just turned on → initialize pilot level randomly
-        if (prevStereoState === false) {
-          levels.stereoPilot = Math.floor(Math.random() * (50 - 10 + 1)) + 10;
-        }
-        stereoIcon.classList.add('stereo-on');
-        stereoIcon.classList.remove('stereo-off');
-      } else {
-        // Mono → very low pilot level
-        stereoIcon.classList.add('stereo-off');
-        stereoIcon.classList.remove('stereo-on');
-        levels.stereoPilot = 3;
-      }
-      prevStereoState = message.st === true;
-    }
-    updateMeter('stereo-pilot-meter', levels.stereoPilot);
 
     // --- RDS indicator and "level" ---
     const rdsIcon = document.getElementById('rdsIcon');
@@ -138,29 +146,46 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
       if (prevRdsState === false) {
         levels.rds = Math.floor(Math.random() * (40 - 10 + 1)) + 10;
       }
-      if (rdsIcon) rdsIcon.src = '/js/plugins/MetricsMonitor/images/rds_on.png';
     } else {
       // No RDS → very low level
       levels.rds = 3;
-      if (rdsIcon) rdsIcon.src = '/js/plugins/MetricsMonitor/images/rds_off.png';
     }
     prevRdsState = message.rds === true;
+
+    if (rdsIcon) {
+      const newRdsSrc = message.rds === true
+        ? '/js/plugins/MetricsMonitor/images/rds_on.png'
+        : '/js/plugins/MetricsMonitor/images/rds_off.png';
+      if (rdsIcon.dataset.currentSrc !== newRdsSrc) {
+        rdsIcon.src = newRdsSrc;
+        rdsIcon.dataset.currentSrc = newRdsSrc;
+      }
+    }
+
     updateMeter('rds-meter', levels.rds);
 
     // --- TP (Traffic Programme) icon ---
     const tpIcon = document.getElementById('tpIcon');
-    if (message.tp === 1) {
-      if (tpIcon) tpIcon.src = '/js/plugins/MetricsMonitor/images/tp_on.png';
-    } else if (tpIcon) {
-      tpIcon.src = '/js/plugins/MetricsMonitor/images/tp_off.png';
+    if (tpIcon) {
+      const newTpSrc = message.tp === 1
+        ? '/js/plugins/MetricsMonitor/images/tp_on.png'
+        : '/js/plugins/MetricsMonitor/images/tp_off.png';
+      if (tpIcon.dataset.currentSrc !== newTpSrc) {
+        tpIcon.src = newTpSrc;
+        tpIcon.dataset.currentSrc = newTpSrc;
+      }
     }
 
     // --- TA (Traffic Announcement) icon ---
     const taIcon = document.getElementById('taIcon');
-    if (message.ta === 1) {
-      if (taIcon) taIcon.src = '/js/plugins/MetricsMonitor/images/ta_on.png';
-    } else if (taIcon) {
-      taIcon.src = '/js/plugins/MetricsMonitor/images/ta_off.png';
+    if (taIcon) {
+      const newTaSrc = message.ta === 1
+        ? '/js/plugins/MetricsMonitor/images/ta_on.png'
+        : '/js/plugins/MetricsMonitor/images/ta_off.png';
+      if (taIcon.dataset.currentSrc !== newTaSrc) {
+        taIcon.src = newTaSrc;
+        taIcon.dataset.currentSrc = newTaSrc;
+      }
     }
   }
 
@@ -221,51 +246,42 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
     eccWrapper.style.whiteSpace = 'nowrap';
     leftGroup.appendChild(eccWrapper);
 
-    // Try to clone an existing ECC flag from TEF Logger UI, otherwise show "ECC"
-    const eccSpan = document.querySelector('.data-flag');
-    if (eccSpan && eccSpan.innerHTML.trim() !== "") {
-      eccWrapper.appendChild(eccSpan.cloneNode(true));
-    } else {
-      const noEcc = document.createElement('span');
-      noEcc.textContent = 'ECC';
-      noEcc.style.color = '#696969';
-      noEcc.style.fontSize = '13px';
-      eccWrapper.appendChild(noEcc);
-    }
+    // --- Stereo icon ---
+    const stereoIcon = document.createElement('span');
+    stereoIcon.id = 'stereoIcon';
+    stereoIcon.className = 'stereo-icon stereo-off';
+    stereoIcon.title = 'Stereo';
+    leftGroup.appendChild(stereoIcon);
 
-    // --- Stereo icon (cloned from original TEF Logger stereo container) ---
-    const stereoSource = document.querySelector('.stereo-container');
-    if (stereoSource) {
-      const stereoClone = stereoSource.cloneNode(true);
-      stereoClone.id = 'stereoIcon';
-      stereoClone.removeAttribute('style');  // use our own CSS
-      stereoClone.classList.add("tooltip");
-      stereoClone.setAttribute("data-tooltip", "Stereo / Mono toggle. Click to toggle.");
-      leftGroup.appendChild(stereoClone);
-    }
-
-    // --- PTY label placeholder ---
+    // --- PTY label ---
     const ptyLabel = document.createElement('span');
     ptyLabel.id = 'ptyLabel';
+    ptyLabel.className = 'pty-label';
     ptyLabel.textContent = 'PTY';
-    ptyLabel.style.color = '#696969';
-    ptyLabel.style.fontSize = '13px';
-	ptyLabel.style.width = '100px';
     leftGroup.appendChild(ptyLabel);
 
-    // --- TP / TA / RDS PNG icons ---
-    const iconMap = [
-      { id: 'tpIcon',  off: '/js/plugins/MetricsMonitor/images/tp_off.png' },
-      { id: 'taIcon',  off: '/js/plugins/MetricsMonitor/images/ta_off.png' },
-      { id: 'rdsIcon', off: '/js/plugins/MetricsMonitor/images/rds_off.png' }
+    // --- Right group: TP / TA / RDS icons ---
+    const rightGroup = document.createElement('div');
+    rightGroup.style.display = 'flex';
+    rightGroup.style.alignItems = 'center';
+    rightGroup.style.gap = '6px';
+    rightGroup.style.marginLeft = 'auto';
+    iconsBar.appendChild(rightGroup);
+
+    const icons = [
+      { id: 'tpIcon',  title: 'TP',  on: 'tp_on.png',  off: 'tp_off.png' },
+      { id: 'taIcon',  title: 'TA',  on: 'ta_on.png',  off: 'ta_off.png' },
+      { id: 'rdsIcon', title: 'RDS', on: 'rds_on.png', off: 'rds_off.png' }
     ];
-    iconMap.forEach(({ id, off }) => {
+
+    icons.forEach(({ id, title, on, off }) => {
       const img = document.createElement('img');
-      img.className = 'status-icon';
       img.id = id;
+      img.className = 'status-icon';
+      img.title = title;
       img.alt = id;
       img.src = off;
-      iconsBar.appendChild(img);
+      rightGroup.appendChild(img);
     });
 
     // Start WebSocket for text/status data
