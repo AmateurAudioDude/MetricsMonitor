@@ -4,9 +4,12 @@
 
 (() => {
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;       // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;           // Do not touch - this value is automatically updated via the config file
-
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
+
 
   ///////////////////////////////////////////////////////////////
 

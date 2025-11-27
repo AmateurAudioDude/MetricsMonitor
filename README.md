@@ -6,9 +6,9 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 <img width="1260" height="306" alt="start" src="https://github.com/user-attachments/assets/863202ce-d88d-46c7-9d9f-be3c52b49228" />
 
 
-## v1.0
+## v1.0a
 
-- Three display modes: Audio + PILOT/MPX/RDS spectrum analysis / Audio + equalizer (Switching is done by clicking on the display)
+- Unit of measurement corrected at MPX level
 
 ## Installation notes
 
@@ -28,6 +28,9 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 The following variables can be changed in the metricsmonitor.json config file:
 
     "sampleRate": 48000,          //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
+	"fftSize": 512,               //  Here you can change the frequency sampling rate for the spectrum display. The higher the value (e.g., 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
+	"minSendIntervalMs": 30       //  Here you can change the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
+	"SpectrumAverageLevel": 15    //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
     "stereoBoost": 1,             //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
     "eqBoost": 1,                 //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
     "MODULE_SEQUENCE": "1, 2, 0"  // Here you can set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer. Single values ​​or comma-separated values ​​can be entered ("1, 2, 0" - default).
@@ -88,3 +91,7 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v1.0
+
+- Three display modes: Audio + PILOT/MPX/RDS spectrum analysis / Audio + equalizer (Switching is done by clicking on the display)

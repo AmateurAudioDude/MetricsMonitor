@@ -1,12 +1,12 @@
-//////////////////////////////////////////////////////////////
-//                                                          //
-//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.0) //
-//                                                          //
-//  by Highpoint               last update: 24.11.2025      //
-//                                                          //
-//  https://github.com/Highpoint2000/metricsmonitor         //
-//                                                          //
-//////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
+//                                                           //
+//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.0a) //
+//                                                           //
+//  by Highpoint               last update: 27.11.2025       //
+//                                                           //
+//  https://github.com/Highpoint2000/metricsmonitor          //
+//                                                           //
+///////////////////////////////////////////////////////////////
 
 
 //-------------------------------------------------------------
@@ -174,6 +174,9 @@ const configFilePath = path.join(
 const defaultConfig = {
   // must be first property in the JSON file
   sampleRate: 48000,
+  fftSize: 512,
+  SpectrumAverageLevel: 15,
+  minSendIntervalMs: 30,
   stereoBoost: 1.0,
   eqBoost: 1.0,
   MODULE_SEQUENCE: "1, 2, 0",
@@ -186,6 +189,18 @@ function normalizePluginConfig(json) {
       typeof json.sampleRate !== "undefined"
         ? json.sampleRate
         : defaultConfig.sampleRate,
+    fftSize:
+      typeof json.fftSize !== "undefined"
+        ? json.fftSize
+        : defaultConfig.fftSize,
+    SpectrumAverageLevel:
+      typeof json.SpectrumAverageLevel !== "undefined"
+        ? json.SpectrumAverageLevel
+        : defaultConfig.SpectrumAverageLevel,
+    minSendIntervalMs:
+      typeof json.minSendIntervalMs !== "undefined"
+        ? json.minSendIntervalMs
+        : defaultConfig.minSendIntervalMs,
     stereoBoost:
       typeof json.stereoBoost !== "undefined"
         ? json.stereoBoost
@@ -312,6 +327,37 @@ function getEqBoost(cfg) {
     : defaultConfig.eqBoost;
 }
 
+function getFftSize(cfg) {
+  if (!cfg) return defaultConfig.fftSize;
+  const val =
+    typeof cfg.fftSize === "string" ? Number(cfg.fftSize) : cfg.fftSize;
+  return typeof val === "number" && !Number.isNaN(val) && val > 0
+    ? val
+    : defaultConfig.fftSize;
+}
+
+function getMinSendIntervalMs(cfg) {
+  if (!cfg) return defaultConfig.minSendIntervalMs;
+  const val =
+    typeof cfg.minSendIntervalMs === "string"
+      ? Number(cfg.minSendIntervalMs)
+      : cfg.minSendIntervalMs;
+  return typeof val === "number" && !Number.isNaN(val) && val > 0
+    ? val
+    : defaultConfig.minSendIntervalMs;
+}
+
+function getSpectrumAverageLevel(cfg) {
+  if (!cfg) return defaultConfig.SpectrumAverageLevel;
+  const val =
+    typeof cfg.SpectrumAverageLevel === "string"
+      ? Number(cfg.SpectrumAverageLevel)
+      : cfg.SpectrumAverageLevel;
+  return typeof val === "number" && !Number.isNaN(val) && val > 0
+    ? val
+    : defaultConfig.SpectrumAverageLevel;
+}
+
 // Load plugin configuration
 const configPlugin = loadConfig(configFilePath);
 
@@ -321,6 +367,9 @@ const ANALYZER_SAMPLE_RATE = getPluginSampleRate(configPlugin);
 const CONFIG_SAMPLE_RATE = ANALYZER_SAMPLE_RATE; // used for 3LAS vs MPXCapture decision
 const STEREO_BOOST = getStereoBoost(configPlugin);
 const EQ_BOOST = getEqBoost(configPlugin);
+const FFT_SIZE = getFftSize(configPlugin);
+const MIN_SEND_INTERVAL_MS = getMinSendIntervalMs(configPlugin);
+const SPECTRUM_AVERAGE_LEVELS = getSpectrumAverageLevel(configPlugin);
 
 // Only enable MPX if sequence contains 1 (Level meters) or 2 (Analyzer)
 const ENABLE_MPX = hasAnalyzerOrMeters(configPlugin);
@@ -380,12 +429,16 @@ function updateSettings() {
     return (
       `const sampleRate = ${ANALYZER_SAMPLE_RATE};    // Do not touch - this value is automatically updated via the config file\n` +
       `const stereoBoost = ${STEREO_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const eqBoost = ${EQ_BOOST};    // Do not touch - this value is automatically updated via the config file\n`
+      `const eqBoost = ${EQ_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const SpectrumAverageLevel = ${SPECTRUM_AVERAGE_LEVELS};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const minSendIntervalMs = ${MIN_SEND_INTERVAL_MS};    // Do not touch - this value is automatically updated via the config file\n`
     );
   }
 
   // ---------------------------------------------------------
-  // Remove old sampleRate/stereoBoost/eqBoost declarations
+  // Remove old sampleRate/stereoBoost/eqBoost/fftSize/
+  // SpectrumAverageLevel/minSendIntervalMs declarations
   // and standalone "Do not touch" comment lines.
   // MODULE_SEQUENCE and its comment are NOT touched here.
   // ---------------------------------------------------------
@@ -394,7 +447,10 @@ function updateSettings() {
     let out = code
       .replace(/^\s*const\s+sampleRate\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+stereoBoost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+eqBoost\s*=.*;[^\n]*\n?/gm, "");
+      .replace(/^\s*const\s+eqBoost\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "");
 
     // 2) remove pure "Do not touch..." comment lines,
     //    but keep inline comments behind other statements
@@ -440,7 +496,7 @@ function updateSettings() {
       const updated = modifyFn(data);
       fs.writeFileSync(filePath, updated, "utf8");
       // Uncomment for debugging:
-      // logInfo(`[MPX] Updated ${label} (sampleRate=${ANALYZER_SAMPLE_RATE}, stereoBoost=${STEREO_BOOST}, eqBoost=${EQ_BOOST})`);
+      // logInfo(`[MPX] Updated ${label} (sampleRate=${ANALYZER_SAMPLE_RATE}, stereoBoost=${STEREO_BOOST}, eqBoost=${EQ_BOOST}, fftSize=${FFT_SIZE}, SpectrumAverageLevel=${SPECTRUM_AVERAGE_LEVELS}, minSendIntervalMs=${MIN_SEND_INTERVAL_MS})`);
     } catch (err) {
       logError(`[MPX] Error updating ${label}:`, err);
     }
@@ -471,7 +527,7 @@ function updateSettings() {
           updated;
       }
 
-      // Insert sampleRate/stereoBoost/eqBoost header after the IIFE
+      // Insert header block after the IIFE
       return insertAfterIIFE(updated);
     }
   );
@@ -619,26 +675,27 @@ if (!ENABLE_MPX) {
   //-----------------------------------------------------------
   let SAMPLE_RATE = 192000; // default for MPXCapture.exe (Windows/macOS)
 
-  // FFT configuration
-  const FFT_SIZE = 512;
+  // FFT configuration (configured via metricsmonitor.json)
   const HOP_SIZE = FFT_SIZE / 2;
   const MAX_LATENCY_BLOCKS = 2; // we keep at most this many FFT blocks
 
   // Webserver port (from main config)
-let SERVER_PORT = 8080;
+  let SERVER_PORT = 8080;
 
-try {
-  if (mainConfig?.webserver?.webserverPort) {
-    SERVER_PORT = parseInt(mainConfig.webserver.webserverPort, 10);
-    if (isNaN(SERVER_PORT)) SERVER_PORT = 8080;
+  try {
+    if (mainConfig?.webserver?.webserverPort) {
+      SERVER_PORT = parseInt(mainConfig.webserver.webserverPort, 10);
+      if (isNaN(SERVER_PORT)) SERVER_PORT = 8080;
+    }
+  } catch (e) {
+    SERVER_PORT = 8080;
   }
-} catch(e) {
-  SERVER_PORT = 8080;
-}
-
 
   logInfo(`[MPX] Using webserver port from config.json → ${SERVER_PORT}`);
   logInfo(`[MPX] sampleRate from metricsmonitor.json → ${CONFIG_SAMPLE_RATE} Hz`);
+  logInfo(`[MPX] FFT_SIZE from metricsmonitor.json → ${FFT_SIZE} points`);
+  logInfo(`[MPX] SpectrumAverageLevel from metricsmonitor.json → ${SPECTRUM_AVERAGE_LEVELS}`);
+  logInfo(`[MPX] minSendIntervalMs from metricsmonitor.json → ${MIN_SEND_INTERVAL_MS} ms`);
 
   // MPX capture executable resolution (for Windows/macOS only)
   const osPlatform = process.platform;
@@ -689,9 +746,8 @@ try {
     );
   }
 
-
-  // Frequency of updates to the browser (~33 FPS)
-  const MIN_SEND_INTERVAL_MS = 30;
+  // Frequency of updates to the browser (~33 FPS, configurable via config)
+  // MIN_SEND_INTERVAL_MS is taken from metricsmonitor.json
 
   // Horizontal bin reduction to reduce payload size
   const BIN_STEP = 2;
@@ -906,9 +962,7 @@ try {
           .then(() => {
             const s = audioStream.Server;
             if (!s || !s.StdIn) {
-              logError(
-                "[MPX] 3LAS Server has no StdIn stream – MPX spectrum capture disabled."
-              );
+              logError("[MPX] 3LAS Server has no StdIn stream – MPX spectrum capture disabled.");
               return;
             }
 

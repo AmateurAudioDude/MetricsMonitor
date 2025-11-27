@@ -4,8 +4,11 @@
 
 (() => {
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
 
 
 /////////////////////////////////////////////////////////////////
@@ -23,13 +26,13 @@ const Y_STRETCH = 0.8;
 const GRID_X_OFFSET = 30;
 const BASE_SCALE_DB = [0, -10, -20, -30, -40, -50];
 
-let MPX_AVERAGE_LEVELS = 30;
+let MPX_AVERAGE_LEVELS = SpectrumAverageLevel;
 let MPX_DB_MIN = -58;
 let MPX_DB_MAX = 0;
 let MPX_FMAX_HZ = 76000;
 
 let CURVE_GAIN = 0.80;
-let CURVE_Y_OFFSET_DB = -8;
+let CURVE_Y_OFFSET_DB = -3;
 let CURVE_X_STRETCH = 1.4;
 let CURVE_X_SCALE = 1.0;
 

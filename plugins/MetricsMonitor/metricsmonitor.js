@@ -1,18 +1,21 @@
-////////////////////////////////////////////////////////////////
-///                                                          ///
-///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.0) ///
-///                                                          ///
-///  by Highpoint               last update: 25.11.2025      ///
-///                                                          ///
-///  https://github.com/Highpoint2000/metricsmonitor         ///
-///                                                          ///
-////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+///                                                           ///
+///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.0a) ///
+///                                                           ///
+///  by Highpoint               last update: 27.11.2025       ///
+///                                                           ///
+///  https://github.com/Highpoint2000/metricsmonitor          ///
+///                                                           ///
+/////////////////////////////////////////////////////////////////
 
 (() => {
-  const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-  const stereoBoost = 1;       // Do not touch - this value is automatically updated via the config file
-  const eqBoost = 1;           // Do not touch - this value is automatically updated via the config file
-  const MODULE_SEQUENCE = [1, 2, 0]; // Do not touch - this value is automatically updated via the config file
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automatically updated via the config file
 
   // ---------------------------------------------------------
   // Plugin version + update check configuration

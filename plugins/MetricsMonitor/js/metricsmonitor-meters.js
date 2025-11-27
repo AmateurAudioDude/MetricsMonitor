@@ -3,9 +3,12 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const sampleRate = 96000;    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
 const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
 
   ///////////////////////////////////////////////////////////////
 
@@ -207,7 +210,7 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
     stereoPilot: ["15,0","13,0","11,0","9,0","7,0","5,0","3,0","1,0","0 kHz"],
     hf: [], // will be built via buildHFScale(hfUnit)
     rds: ["10,0","9,0","8,0","7,0","6,0","5,0","4,0","3,0","2,0","1,0","0 kHz"],
-    mpx: ["-120,0","-105,0","-90,0","-75,0","-60,0","-45,0","-30,0","-15,0","0 kHz"]
+    mpx: ["120,0","105,0","90,0","75,0","60,0","45,0","30,0","15,0","0 kHz"]
   };
 
   // Peak-hold update for LEFT / RIGHT
