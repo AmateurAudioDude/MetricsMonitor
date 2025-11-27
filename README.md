@@ -9,6 +9,7 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 ## v1.0a
 
 - Unit of measurement corrected at MPX level
+- Variables for individually adjusting the spectrum have been added (see Configuration options)
 
 ## Installation notes
 
