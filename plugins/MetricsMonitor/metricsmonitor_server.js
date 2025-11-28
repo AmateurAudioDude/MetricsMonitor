@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.0a) //
+//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.1)  //
 //                                                           //
-//  by Highpoint               last update: 27.11.2025       //
+//  by Highpoint               last update: 28.11.2025       //
 //                                                           //
 //  https://github.com/Highpoint2000/metricsmonitor          //
 //                                                           //
@@ -92,7 +92,7 @@ const Server = new StreamServer(null, audioChannels, sampleRate);
 
 
 //-------------------------------------------------------------
-//  Patch helpers.js → localhost von antispamProtection ausnehmen
+//  Patch helpers.js → exempt localhost from antispamProtection
 //-------------------------------------------------------------
 const LOCALHOST_PATCH_MARKER = "// MM_LOCALHOST_SPAM_BYPASS:";
 
@@ -158,7 +158,7 @@ function patchHelpersForLocalhostBypass() {
 
 //-------------------------------------------------------------
 //  Plugin configuration (metricsmonitor.json)
-//  – we store everything only here, NOT in config.json
+//  – all plugin settings are stored here (not in config.json)
 //-------------------------------------------------------------
 const configFilePath = path.join(
   __dirname,
@@ -177,6 +177,7 @@ const defaultConfig = {
   fftSize: 512,
   SpectrumAverageLevel: 15,
   minSendIntervalMs: 30,
+  MPXmode: "off",           // "off" | "on" | "auto"
   stereoBoost: 1.0,
   eqBoost: 1.0,
   MODULE_SEQUENCE: "1, 2, 0",
@@ -201,6 +202,10 @@ function normalizePluginConfig(json) {
       typeof json.minSendIntervalMs !== "undefined"
         ? json.minSendIntervalMs
         : defaultConfig.minSendIntervalMs,
+    MPXmode:
+      typeof json.MPXmode !== "undefined"
+        ? json.MPXmode
+        : defaultConfig.MPXmode,
     stereoBoost:
       typeof json.stereoBoost !== "undefined"
         ? json.stereoBoost
@@ -227,7 +232,7 @@ function normalizePluginConfig(json) {
 
 // ---------------------------------------------------------
 // Check if MODULE_SEQUENCE contains modules 1 or 2
-// (1 = Level meters, 2 = Analyzer → brauchen MPX)
+// (1 = Level meters, 2 = Analyzer → require MPX stack)
 // ---------------------------------------------------------
 function hasAnalyzerOrMeters(config) {
   const raw = config && typeof config.MODULE_SEQUENCE !== "undefined"
@@ -245,7 +250,7 @@ function hasAnalyzerOrMeters(config) {
       .filter((n) => !Number.isNaN(n));
   }
 
-  // 1 = Level meters, 2 = Analyzer → MPX-Stack erforderlich
+  // 1 = Level meters, 2 = Analyzer → MPX stack required
   return arr.includes(1) || arr.includes(2);
 }
 
@@ -358,6 +363,17 @@ function getSpectrumAverageLevel(cfg) {
     : defaultConfig.SpectrumAverageLevel;
 }
 
+function getMpxMode(cfg) {
+  if (!cfg || typeof cfg.MPXmode === "undefined") {
+    return defaultConfig.MPXmode;
+  }
+  const val = String(cfg.MPXmode).toLowerCase();
+  if (val === "on" || val === "off" || val === "auto") {
+    return val;
+  }
+  return defaultConfig.MPXmode;
+}
+
 // Load plugin configuration
 const configPlugin = loadConfig(configFilePath);
 
@@ -370,6 +386,7 @@ const EQ_BOOST = getEqBoost(configPlugin);
 const FFT_SIZE = getFftSize(configPlugin);
 const MIN_SEND_INTERVAL_MS = getMinSendIntervalMs(configPlugin);
 const SPECTRUM_AVERAGE_LEVELS = getSpectrumAverageLevel(configPlugin);
+const MPX_MODE = getMpxMode(configPlugin); // "off" | "on" | "auto"
 
 // Only enable MPX if sequence contains 1 (Level meters) or 2 (Analyzer)
 const ENABLE_MPX = hasAnalyzerOrMeters(configPlugin);
@@ -422,9 +439,9 @@ const MetricsMonitorClientHeaderFile = path.join(
 //-------------------------------------------------------------
 function updateSettings() {
 
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   // Build the constant block that will be injected after the IIFE
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   function buildHeaderBlock() {
     return (
       `const sampleRate = ${ANALYZER_SAMPLE_RATE};    // Do not touch - this value is automatically updated via the config file\n` +
@@ -432,16 +449,16 @@ function updateSettings() {
       `const eqBoost = ${EQ_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
       `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
       `const SpectrumAverageLevel = ${SPECTRUM_AVERAGE_LEVELS};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const minSendIntervalMs = ${MIN_SEND_INTERVAL_MS};    // Do not touch - this value is automatically updated via the config file\n`
+      `const minSendIntervalMs = ${MIN_SEND_INTERVAL_MS};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const MPXmode = "${MPX_MODE}";    // Do not touch - this value is automatically updated via the config file\n`
     );
   }
 
-  // ---------------------------------------------------------
-  // Remove old sampleRate/stereoBoost/eqBoost/fftSize/
-  // SpectrumAverageLevel/minSendIntervalMs declarations
-  // and standalone "Do not touch" comment lines.
-  // MODULE_SEQUENCE and its comment are NOT touched here.
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
+  // Remove old const declarations for header values and
+  // standalone "Do not touch" comment lines.
+  // MODULE_SEQUENCE and its comment are not touched here.
+  //-----------------------------------------------------------
   function removeOldConstants(code) {
     // 1) remove old const lines (including any inline comments)
     let out = code
@@ -450,7 +467,8 @@ function updateSettings() {
       .replace(/^\s*const\s+eqBoost\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "");
+      .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+MPXmode\s*=.*;[^\n]*\n?/gm, "");
 
     // 2) remove pure "Do not touch..." comment lines,
     //    but keep inline comments behind other statements
@@ -462,10 +480,10 @@ function updateSettings() {
     return out;
   }
 
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   // Insert the header block directly after "(() => {"
   // without introducing extra blank lines.
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   function insertAfterIIFE(code) {
     const cleaned = removeOldConstants(code);
 
@@ -487,24 +505,24 @@ function updateSettings() {
     );
   }
 
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   // Helper to update any client-side script file (synchronous)
-  // ---------------------------------------------------------
+  //-----------------------------------------------------------
   function updateClientFile(filePath, label, modifyFn) {
     try {
       const data = fs.readFileSync(filePath, "utf8");
       const updated = modifyFn(data);
       fs.writeFileSync(filePath, updated, "utf8");
       // Uncomment for debugging:
-      // logInfo(`[MPX] Updated ${label} (sampleRate=${ANALYZER_SAMPLE_RATE}, stereoBoost=${STEREO_BOOST}, eqBoost=${EQ_BOOST}, fftSize=${FFT_SIZE}, SpectrumAverageLevel=${SPECTRUM_AVERAGE_LEVELS}, minSendIntervalMs=${MIN_SEND_INTERVAL_MS})`);
+      // logInfo(`[MPX] Updated ${label} (sampleRate=${ANALYZER_SAMPLE_RATE}, stereoBoost=${STEREO_BOOST}, eqBoost=${EQ_BOOST}, fftSize=${FFT_SIZE}, SpectrumAverageLevel=${SPECTRUM_AVERAGE_LEVELS}, minSendIntervalMs=${MIN_SEND_INTERVAL_MS}, MPXmode=${MPX_MODE})`);
     } catch (err) {
       logError(`[MPX] Error updating ${label}:`, err);
     }
   }
 
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   // 1) metricsmonitor.js: update MODULE_SEQUENCE AND insert header
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   updateClientFile(
     MetricsMonitorClientFile,
     "metricsmonitor.js",
@@ -532,36 +550,36 @@ function updateSettings() {
     }
   );
 
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   // 2) Insert header constants into analyzer script
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   updateClientFile(
     MetricsMonitorClientAnalyzerFile,
     "metricsmonitor-analyzer.js",
     insertAfterIIFE
   );
 
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   // 3) Insert header constants into equalizer script
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   updateClientFile(
     MetricsMonitorClientEqualizerFile,
     "metricsmonitor-equalizer.js",
     insertAfterIIFE
   );
 
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   // 4) Insert header constants into header script
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   updateClientFile(
     MetricsMonitorClientHeaderFile,
     "metricsmonitor-header.js",
     insertAfterIIFE
   );
 
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   // 5) Insert header constants into meters script
-  // --------------------------------------------------------------------
+  //-----------------------------------------------------------
   updateClientFile(
     MetricsMonitorClientMetersFile,
     "metricsmonitor-meters.js",
@@ -653,7 +671,7 @@ copyClientFiles();
 //  Enable / disable MPX stack depending on MODULE_SEQUENCE
 //-------------------------------------------------------------
 if (!ENABLE_MPX) {
-  // nur ein Log-Eintrag, wie gewünscht
+  // Only log a message – MPX processing is fully disabled
   logInfo(
     `[MPX] MODULE_SEQUENCE = ${MODULE_SEQUENCE} → ` +
     "MPX capture & server-side MPX processing are disabled."
@@ -696,6 +714,7 @@ if (!ENABLE_MPX) {
   logInfo(`[MPX] FFT_SIZE from metricsmonitor.json → ${FFT_SIZE} points`);
   logInfo(`[MPX] SpectrumAverageLevel from metricsmonitor.json → ${SPECTRUM_AVERAGE_LEVELS}`);
   logInfo(`[MPX] minSendIntervalMs from metricsmonitor.json → ${MIN_SEND_INTERVAL_MS} ms`);
+  logInfo(`[MPX] MPXmode from metricsmonitor.json → ${MPX_MODE}`);
 
   // MPX capture executable resolution (for Windows/macOS only)
   const osPlatform = process.platform;
@@ -759,7 +778,7 @@ if (!ENABLE_MPX) {
 
 
   //-----------------------------------------------------------
-  //  WebSocket connection to /data_plugins
+  //  WebSocket connection to /data_plugins (MPX output channel)
   //-----------------------------------------------------------
   let dataPluginsWs = null;
   let reconnectTimer = null;
@@ -809,6 +828,7 @@ if (!ENABLE_MPX) {
     });
   }
 
+  // Start the /data_plugins WebSocket connection (no L0/L1 commands are sent here)
   connectDataPluginsWs();
 
 

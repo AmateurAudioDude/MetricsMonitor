@@ -1,8 +1,8 @@
 /////////////////////////////////////////////////////////////////
 ///                                                           ///
-///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.0a) ///
+///  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.1)  ///
 ///                                                           ///
-///  by Highpoint               last update: 27.11.2025       ///
+///  by Highpoint               last update: 28.11.2025       ///
 ///                                                           ///
 ///  https://github.com/Highpoint2000/metricsmonitor          ///
 ///                                                           ///
@@ -15,14 +15,15 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
 const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
-const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [0,1,2];    // Do not touch - this value is automatically updated via the config file
 
   // ---------------------------------------------------------
   // Plugin version + update check configuration
   // ---------------------------------------------------------
 
-  const plugin_version = '1.0a'; // MetricsMonitor client version (adjust when you release a new version)
-  const updateInfo     = true;  // Enable or disable GitHub version check
+  const plugin_version = '1.1'; // MetricsMonitor client version (adjust when you release a new version)
+  const updateInfo     = true;   // Enable or disable GitHub version check
 
   const plugin_name = 'MetricsMonitor';
   const plugin_path = 'https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/';
@@ -40,7 +41,7 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
 
   let START_INDEX = 0;
 
-  // safety: if sequence is empty, fall back to [0]
+  // Safety: if sequence is empty, fall back to [0]
   const ACTIVE_SEQUENCE =
     Array.isArray(MODULE_SEQUENCE) && MODULE_SEQUENCE.length > 0
       ? MODULE_SEQUENCE
@@ -60,7 +61,7 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
   // GLOBAL SIGNAL UNIT HANDLING (dBf / dBuV / dBm)
   // ---------------------------------------------------------
 
-  // Public global state
+  // Public global state namespace
   window.MetricsMonitor = window.MetricsMonitor || {};
 
   let globalSignalUnit = localStorage.getItem("mm_signal_unit") || "dbf";
@@ -71,7 +72,7 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
     return globalSignalUnit;
   };
 
-  // Setter (internal + sub-scripts)
+  // Setter (used internally + by sub-scripts)
   window.MetricsMonitor.setSignalUnit = function (unit) {
     if (!unit) return;
     unit = unit.toLowerCase();
@@ -85,14 +86,14 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
     signalUnitListeners.forEach(fn => fn(unit));
   };
 
-  // Listener API
+  // Listener API for other scripts
   window.MetricsMonitor.onSignalUnitChange = function (fn) {
     if (typeof fn === "function") {
       signalUnitListeners.push(fn);
     }
   };
 
-  // Dropdown scanner
+  // Attach to global "Signal units" dropdown in the UI
   function hookSignalUnitDropdown() {
     const input = document.getElementById("signal-selector-input");
     const options = document.querySelectorAll("#signal-selector .option");
@@ -105,7 +106,7 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
 
     console.log("[MetricsMonitor] Signal unit dropdown found");
 
-    // 1) Restore stored value
+    // 1) Restore stored value (internal value, not the pretty label)
     input.value = globalSignalUnit;
 
     // Trigger listeners so sub-scripts can rebuild scales immediately
@@ -223,6 +224,176 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
   }
 
 
+// ---------------------------------------------------------
+// TEXT SOCKET via window.socketPromise  (NO new WebSocket)
+// ---------------------------------------------------------
+
+let TextSocket = null;
+let textSocketReady = false;
+
+// Wait for global socketPromise from Webserver
+async function ensureTextSocket() {
+  try {
+    if (!window.socketPromise) {
+      console.error("[MetricsMonitor] socketPromise not available.");
+      return null;
+    }
+
+    // Wait until connected
+    TextSocket = await window.socketPromise;
+
+    if (!TextSocket) {
+      console.error("[MetricsMonitor] socketPromise returned null.");
+      return null;
+    }
+
+    if (!textSocketReady) {
+      console.log("[MetricsMonitor] TextSocket available via socketPromise.");
+
+      // Optional: log / error listeners for debugging
+      TextSocket.addEventListener("open", () => {
+        console.log("[MetricsMonitor] TextSocket OPEN");
+      });
+
+      TextSocket.addEventListener("close", () => {
+        console.warn("[MetricsMonitor] TextSocket CLOSED");
+      });
+
+      TextSocket.addEventListener("error", (ev) => {
+        console.error("[MetricsMonitor] TextSocket ERROR:", ev);
+      });
+
+      textSocketReady = true;
+    }
+
+    return TextSocket;
+
+  } catch (err) {
+    console.error("[MetricsMonitor] ensureTextSocket() failed:", err);
+    return null;
+  }
+}
+
+
+// ---------------------------------------------------------
+// SEND L0 / L1 COMMAND (via existing socket)
+// ---------------------------------------------------------
+
+async function sendTextWebSocketCommand(cmd) {
+  const ws = await ensureTextSocket();
+  if (!ws) {
+    console.error(`[MetricsMonitor] Cannot send "${cmd}" – no TextSocket.`);
+    return;
+  }
+
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(cmd);
+      console.log(`[MetricsMonitor] TextSocket → "${cmd}"`);
+
+      if (window.MetricsHeader &&
+          typeof window.MetricsHeader.setMonoLockFromMode === "function") {
+        window.MetricsHeader.setMonoLockFromMode(cmd);
+      }
+
+    } catch (err) {
+      console.error("[MetricsMonitor] Failed sending command:", err);
+    }
+  } else {
+    console.warn(`[MetricsMonitor] TextSocket not open (state=${ws.readyState}) – retrying...`);
+
+    setTimeout(() => sendTextWebSocketCommand(cmd), 300);
+  }
+}
+
+
+
+  /**
+   * Synchronize L0/L1 state over /text depending on:
+   *  - sampleRate (only if != 48000)
+   *  - MPXmode:
+   *      "off"  → send L0 once at startup, no further switching
+   *      "on"   → send L1 once at startup, no further switching
+   *      "auto" → behave like before, follow current "mode" (Equalizer vs others)
+   *
+   * @param {boolean} isInitial - true for the very first call at startup
+   */
+   
+// Track if L0/L1 was already sent once for MPXmode off/on
+let textModeInitialized = false;
+
+// Track last L0/L1 command in auto mode
+let lastSentTextMode = null;
+   
+  function syncTextWebSocketMode(isInitial) {
+    if (sampleRate === 48000) {
+      console.log(
+        "[MetricsMonitor] sampleRate is 48000 Hz – skipping Text WebSocket mode command (no L0/L1 sent)."
+      );
+      return;
+    }
+
+    let cmd = null;
+
+    // -----------------------------------------------
+    // MPXmode = "off"
+    // → Only one-time L0 at startup, no switching
+    // -----------------------------------------------
+    if (MPXmode === "off") {
+      if (!textModeInitialized && isInitial) {
+        cmd = "L0";
+        console.log("[MetricsMonitor] MPXmode=off – sending one-time L0 at startup.");
+      } else {
+        console.log("[MetricsMonitor] MPXmode=off – no further L0/L1 switching.");
+        return;
+      }
+    }
+    // -----------------------------------------------
+    // MPXmode = "on"
+    // → Only one-time L1 at startup, no switching
+    // -----------------------------------------------
+    else if (MPXmode === "on") {
+      if (!textModeInitialized && isInitial) {
+        cmd = "L1";
+        console.log("[MetricsMonitor] MPXmode=on – sending one-time L1 at startup.");
+      } else {
+        console.log("[MetricsMonitor] MPXmode=on – no further L0/L1 switching.");
+        return;
+      }
+    }
+    // -----------------------------------------------
+    // MPXmode = "auto"
+    // → Keep old behavior: follow visual mode
+    //     mode === 0 → L0 (Equalizer)
+    //     mode !== 0 → L1 (Meters / Analyzer)
+    // -----------------------------------------------
+    else {
+      cmd = (mode === 0 ? "L0" : "L1");
+
+      // Avoid sending duplicate commands if nothing changed
+      if (textModeInitialized && cmd === lastSentTextMode) {
+        console.log(
+          `[MetricsMonitor] MPXmode=auto – L0/L1 unchanged (${cmd}), no command sent.`
+        );
+        return;
+      }
+    }
+
+    if (!cmd) {
+      return;
+    }
+
+    console.log(
+      `[MetricsMonitor] Preparing to send Text WebSocket mode command "${cmd}" ` +
+      `(mode=${mode}, MPXmode=${MPXmode}, initial=${!!isInitial}).`
+    );
+
+    sendTextWebSocketCommand(cmd);
+    textModeInitialized = true;
+    lastSentTextMode = cmd;
+  }
+
+
   // ---------------------------------------------------------
   // Mode switching with fast fade-out / fade-in animation
   // ---------------------------------------------------------
@@ -230,8 +401,11 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
   function switchModeWithFade(nextMode) {
     const meters = document.getElementById("level-meter-container");
     if (!meters) {
+      // No container yet – just switch mode and build
       mode = nextMode;
       buildMeters();
+      // In this path we treat it as non-initial switching
+      syncTextWebSocketMode(false);
       return;
     }
 
@@ -261,6 +435,9 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
     setTimeout(() => {
       mode = nextMode;
       buildMeters();
+
+      // Only allow auto-mode to toggle L0/L1 after startup
+      syncTextWebSocketMode(false);
 
       // Reflow after rebuilding content
       void meters.offsetWidth;
@@ -411,6 +588,9 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
     // Build the initial mode from ACTIVE_SEQUENCE/START_INDEX (no fade)
     buildMeters();
 
+    // Initial sync: send L0/L1 ONCE depending on MPXmode
+    syncTextWebSocketMode(true);
+
     // Enable click-toggle depending on ACTIVE_SEQUENCE length
     attachToggle();
   }
@@ -463,9 +643,9 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
       `[${pluginName}] checkUpdate called: path="${rawPath}", normalized="${path}", setupOnly=${setupOnly}, isSetupPath=${isSetupPath}`
     );
 
-    // If setupOnly is true, we still perform the FETCH (für Console-Info),
-    // aber DOM-Manipulation nur auf /setup.
-    // → kein vorzeitiges return hier!
+    // If setupOnly is true, we still perform the FETCH (for console info),
+    // but DOM manipulation only on /setup.
+    // → no early return here!
 
     // Detect current plugin version from different possible globals
     let pluginVersionCheck =
@@ -533,7 +713,7 @@ const MODULE_SEQUENCE = [1,2,0];    // Do not touch - this value is automaticall
           `There is a new version of this plugin available (${pluginVersionCheck} → ${newVersion})`;
         console.log(`[${pluginName}] ${updateConsoleText}`);
 
-        // DOM-Update nur auf /setup, wenn gewünscht
+        // DOM update only on /setup, if desired
         if (!setupOnly || isSetupPath) {
           setupNotify(pluginVersionCheck, newVersion, pluginName, urlUpdateLink, isSetupPath);
         }

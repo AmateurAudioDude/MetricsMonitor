@@ -6,10 +6,10 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 <img width="1260" height="306" alt="start" src="https://github.com/user-attachments/assets/863202ce-d88d-46c7-9d9f-be3c52b49228" />
 
 
-## v1.0a
+## v1.1
 
-- Unit of measurement corrected at MPX level
-- Variables for individually adjusting the spectrum have been added (see Configuration options)
+- MPX software switching for ESP32 TEF receivers has been added with the new BETA firmware v2.20.5. Three modes are available (see configuration options!).
+- Multiple WebSocket connections revised
 
 ## Installation notes
 
@@ -31,6 +31,7 @@ The following variables can be changed in the metricsmonitor.json config file:
     "sampleRate": 48000,          //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
 	"fftSize": 512,               //  Here you can change the frequency sampling rate for the spectrum display. The higher the value (e.g., 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
 	"minSendIntervalMs": 30       //  Here you can change the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
+	"MPXmode: "off"               //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
 	"SpectrumAverageLevel": 15    //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
     "stereoBoost": 1,             //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
     "eqBoost": 1,                 //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
@@ -82,7 +83,7 @@ If the Headless TEF has an line audio output, the MPX output can be activated vi
   2 = 48 kHz displays the FM audio spectrum up to 19 kHz, 96 kHz displays the FM baseband up to 38 kHz, and 192 kHz displays the MPX spectrum up to 56 kHz. For both sample rates (96 + 192 kHz), the receiver must support MPX output (activate via the menu if necessary).
 - The configuration file allows individual display modules to be switched on or off and the click sequence to be determined.
 - It cannot be guaranteed that the plugin is compatible with all hardware components and platforms.
-- The receiver's output volume setting also affects the display behavior and must be taken into account.
+- The receiver's output volume setting also affects the display behavior and must be taken into account
 
 ## Contact
 
@@ -92,6 +93,11 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v1.0a
+
+- Unit of measurement corrected at MPX level
+- Variables for individually adjusting the spectrum have been added (see Configuration options)
 
 ### v1.0
 

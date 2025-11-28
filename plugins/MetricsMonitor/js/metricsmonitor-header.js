@@ -9,7 +9,7 @@ const eqBoost = 1;    // Do not touch - this value is automatically updated via 
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
 const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
-
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 
   ///////////////////////////////////////////////////////////////
 
@@ -24,13 +24,17 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
     "Oldies Music", "Folk Music", "Documentary"
   ];
 
-  let prevRdsState = false;
-  let prevStereoState = false;
-  let prevTpState   = null;
-  let prevTaState   = null;
   let TextSocket = null;
 
-  // Simple logging helpers for this header module
+  // Last real stereo state from the signal
+  let prevStereoState = false;
+  // When true, L1 is active → force mono display
+  let forcedMonoByL1 = false;
+  
+  let lastForcedState  = null;     // null | true | false
+  let lastVisibleState = null;     // "mono" | "stereo" | "locked"
+
+  // Simple logging helpers
   function logInfo(...msg) {
     console.log('[MetricsHeader]', ...msg);
   }
@@ -46,6 +50,157 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
     img.src = src;
     img.dataset.currentSrc = src;
   }
+
+  // ---------------------------------------------------------
+  // Stereo/Mono circle symbol helpers
+  // ---------------------------------------------------------
+
+  function getStereoIcon() {
+    return document.getElementById('stereoIcon');
+  }
+
+  function getStereoCircles() {
+    const icon = getStereoIcon();
+    if (!icon) return { c1: null, c2: null };
+
+    const c1 = icon.querySelector('.circle1');
+    const c2 = icon.querySelector('.circle2');
+    return { c1, c2 };
+  }
+
+  // Reset only style properties that this script may touch
+  function resetIconStyle(icon) {
+    if (!icon) return;
+    icon.style.opacity       = '';
+    icon.style.filter        = '';
+    icon.style.pointerEvents = '';
+    icon.style.cursor        = '';
+    icon.style.marginLeft    = '';
+	icon.style.marginRight   = '';
+  }
+
+  // Mono form: only circle1 visible, circle2 hidden
+  function applyMonoCircles(dimForced) {
+    const { c1, c2 } = getStereoCircles();
+    if (c1) {
+      c1.style.opacity = '1';
+      c1.style.display = '';
+      c1.style.filter  = '';
+	  c1.marginLeft    = '4px';
+    }
+    if (c2) {
+      c2.style.opacity = '0';
+      c2.style.display = 'none';
+      c2.style.filter  = '';
+    }
+  }
+
+  // Real stereo: both circles visible; icon style from CSS
+  function showStereoSymbol() {
+    const icon = getStereoIcon();
+    const { c1, c2 } = getStereoCircles();
+    if (!icon) return;
+
+    resetIconStyle(icon);
+    icon.classList.remove('stereo-mono');
+
+    if (c1) {
+      c1.style.opacity = '';
+      c1.style.filter  = '';
+      c1.style.display = '';
+    }
+    if (c2) {
+      c2.style.opacity = '';
+      c2.style.filter  = '';
+      c2.style.display = '';
+    }
+  }
+
+  // Mono:
+  //  • L0 (dimForced=false)
+  //  • L1 (dimForced=true)
+  function showMonoSymbol(dimForced) {
+    const icon = getStereoIcon();
+    if (!icon) return;
+
+    icon.classList.add('stereo-mono');
+
+    if (dimForced) {
+      // Forced mono (L1)
+      icon.style.opacity       = '1';
+      icon.style.pointerEvents = 'none';
+      icon.style.cursor        = 'default';
+	  if (prevStereoState) {
+		icon.style.marginLeft    = '8px';
+		icon.style.marginRight    = '-4px';
+	  } else {
+		icon.style.marginLeft    = '4px';
+		icon.style.marginRight    = '0px';
+	  }
+    } else {
+      // Real mono (L0)
+      resetIconStyle(icon);
+    }
+
+    applyMonoCircles(dimForced);
+  }
+
+function applyForcedMonoDisplay() {
+  showMonoSymbol(true);
+
+  // Log only once when switching to locked mono
+  if (lastVisibleState !== "locked") {
+    logInfo("Stereo header indicator forced to MONO (L1 active).");
+    lastVisibleState = "locked";
+  }
+}
+
+function applyRealStereoDisplayFromPrev() {
+  const icon = getStereoIcon();
+  resetIconStyle(icon);
+
+  if (prevStereoState) {
+    showStereoSymbol();
+    if (lastVisibleState !== "stereo") {
+      logInfo("Stereo header indicator restored to STEREO (L0, real signal).");
+      lastVisibleState = "stereo";
+    }
+  } else {
+    showMonoSymbol(false);
+    if (lastVisibleState !== "mono") {
+      logInfo("Stereo header indicator restored to MONO (L0, real signal).");
+      lastVisibleState = "mono";
+    }
+  }
+}
+
+
+function setMonoLockFromMode(cmdRaw) {
+  const cmd = String(cmdRaw).trim().toUpperCase();
+
+  if (cmd === "L1") {
+    forcedMonoByL1 = true;
+    if (lastForcedState !== true) {
+      logInfo('L1 from client – forcing stereo indicator to MONO.');
+      lastForcedState = true;
+    }
+    applyForcedMonoDisplay();
+  }
+  else if (cmd === "L0") {
+    const wasLocked = forcedMonoByL1;
+    forcedMonoByL1 = false;
+
+    if (lastForcedState !== false) {
+      logInfo('L0 from client – restoring stereo indicator to real mono/stereo state.');
+      lastForcedState = false;
+    }
+
+    if (wasLocked) {
+      applyRealStereoDisplayFromPrev();
+    }
+  }
+}
+
 
   /**
    * Handle incoming JSON messages from the WebSocket
@@ -97,6 +252,26 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
       }
     }
 
+if (message.st !== undefined) {
+  const isStereo = (message.st === true || message.st === 1);
+
+  prevStereoState = isStereo;
+
+  if (forcedMonoByL1) {
+    // No logs here → forced state handled above
+    applyForcedMonoDisplay();
+  } else {
+    if (isStereo) {
+      showStereoSymbol();
+      lastVisibleState = "stereo";
+    } else {
+      showMonoSymbol(false);
+      lastVisibleState = "mono";
+    }
+  }
+}
+
+
     // --- ECC (Extended Country Code) badge ---
     const eccWrapper = document.getElementById('eccWrapper');
     if (eccWrapper) {
@@ -132,74 +307,12 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
         }
       }
     }
-
-    // --- Stereo indicator and stereo pilot "level" ---
-    const stereoIcon = document.getElementById('stereoIcon');
-    if (stereoIcon) {
-      if (message.st === true) {
-        // Stereo just turned on → initialize pilot level randomly
-        if (prevStereoState === false) {
-          levels.stereoPilot = Math.floor(Math.random() * (50 - 10 + 1)) + 10;
-        }
-        stereoIcon.classList.add('stereo-on');
-        stereoIcon.classList.remove('stereo-off');
-      } else {
-        // Mono → very low pilot level
-        stereoIcon.classList.add('stereo-off');
-        stereoIcon.classList.remove('stereo-on');
-        levels.stereoPilot = 3;
-      }
-      prevStereoState = message.st === true;
-    }
-    updateMeter('stereo-pilot-meter', levels.stereoPilot);
-
-    // --- RDS indicator and "level" ---
-    const rdsIcon = document.getElementById('rdsIcon');
-    const hasRds = (message.rds === true);
-    if (hasRds) {
-      // RDS just appeared → random level in a useful range
-      if (prevRdsState === false) {
-        levels.rds = Math.floor(Math.random() * (40 - 10 + 1)) + 10;
-      }
-    } else {
-      // No RDS → very low level
-      levels.rds = 3;
-    }
-    if (rdsIcon) {
-      const rdsSrc = hasRds
-        ? '/js/plugins/MetricsMonitor/images/rds_on.png'
-        : '/js/plugins/MetricsMonitor/images/rds_off.png';
-      setIconSrc(rdsIcon, rdsSrc);
-    }
-    prevRdsState = hasRds;
-    updateMeter('rds-meter', levels.rds);
-
-    // --- TP (Traffic Programme) icon ---
-    const tpIcon = document.getElementById('tpIcon');
-    const tpState = (message.tp === 1);
-    if (tpIcon) {
-      const tpSrc = tpState
-        ? '/js/plugins/MetricsMonitor/images/tp_on.png'
-        : '/js/plugins/MetricsMonitor/images/tp_off.png';
-      setIconSrc(tpIcon, tpSrc);
-    }
-    prevTpState = tpState;
-
-    // --- TA (Traffic Announcement) icon ---
-    const taIcon = document.getElementById('taIcon');
-    const taState = (message.ta === 1);
-    if (taIcon) {
-      const taSrc = taState
-        ? '/js/plugins/MetricsMonitor/images/ta_on.png'
-        : '/js/plugins/MetricsMonitor/images/ta_off.png';
-      setIconSrc(taIcon, taSrc);
-    }
-    prevTaState = taState;
   }
 
   /**
    * Initialize the WebSocket used for text / status messages.
    * Reconnects automatically on close.
+   * → uses window.socketPromise
    */
   async function setupTextSocket() {
     if (TextSocket && TextSocket.readyState !== WebSocket.CLOSED) return;
@@ -238,12 +351,12 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
   }
 
   /**
-   * Build and attach the header UI (ECC badge, stereo icon, PTY label,
+   * Build and attach the header UI (ECC badge, stereo/mono, PTY label,
    * TP/TA/RDS icons) into the given `iconsBar` container.
    */
   function initHeader(iconsBar) {
 
-    // --- Group: ECC badge + Stereo icon + PTY label ---
+    // --- Group: ECC badge + Stereo symbol + PTY label ---
     const leftGroup = document.createElement('div');
     leftGroup.style.display = 'flex';
     leftGroup.style.alignItems = 'center';
@@ -270,15 +383,20 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
       eccWrapper.appendChild(noEcc);
     }
 
-    // --- Stereo icon (cloned from original TEF Logger stereo container) ---
+    // --- Stereo circle symbol cloned from .stereo-container ---
     const stereoSource = document.querySelector('.stereo-container');
     if (stereoSource) {
       const stereoClone = stereoSource.cloneNode(true);
       stereoClone.id = 'stereoIcon';
-      stereoClone.removeAttribute('style');  // use our own CSS
+      stereoClone.removeAttribute('style');  // use our own layout
       stereoClone.classList.add("tooltip");
-      stereoClone.setAttribute("data-tooltip", "Stereo / Mono toggle. Click to toggle.");
+      stereoClone.setAttribute("data-tooltip", "Stereo / Mono indicator. Click to toggle.");
+      stereoClone.style.marginLeft = '0px';
+      stereoClone.style.cursor     = 'default'; // indicator only, no toggle
       leftGroup.appendChild(stereoClone);
+
+      // Initial look: treat as mono until first st value comes in
+      showMonoSymbol(false);
     }
 
     // --- PTY label placeholder ---
@@ -309,8 +427,9 @@ const minSendIntervalMs = 15;    // Do not touch - this value is automatically u
     setupTextSocket();
   }
 
-  // Expose the init function for the main plugin code
+  // Expose functions for the main plugin code
   window.MetricsHeader = {
-    initHeader
+    initHeader,
+    setMonoLockFromMode
   };
 })();
