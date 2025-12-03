@@ -3,34 +3,35 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
-
+  const sampleRate = 192000;    // Do not touch - this value is automatically updated via the config file
+  const stereoBoost = 3;    // Do not touch - this value is automatically updated via the config file
+  const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+  const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+  const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+  const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+  const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+
+
   ///////////////////////////////////////////////////////////////
 
   // Feature flags depending on MPX sample rate
-  const RDS_ENABLED   = (sampleRate === 192000); // RDS is only valid at 192 kHz MPX
-  const PILOT_ENABLED = (sampleRate !== 48000);  // Pilot deviation meter not available at 48 kHz
-  const MPX_ENABLED   = (sampleRate === 192000); // MPX total meter only valid at 192 kHz
+  const RDS_ENABLED   = (sampleRate === 192000);
+  const PILOT_ENABLED = (sampleRate !== 48000);
+  const MPX_ENABLED   = (sampleRate === 192000);
 
-  // Global level values (accessible from outside via window.MetricsMeters)
+  // Global level values
   const levels = {
     left: 0,
     right: 0,
     hf: 0,
-    hfBase: 0,    // Base RF value in dBf
-    hfValue: 0,   // Display value in the currently selected unit
+    hfBase: 0,
+    hfValue: 0,
     stereoPilot: 0,
     rds: 0,
-    mpxTotal: 0   // Total MPX modulation meter level (0..100 %)
+    mpxTotal: 0
   };
 
-  // Peak-hold configuration & state for LEFT/RIGHT
+  // Peak-hold configuration
   const PEAK_CONFIG = {
     smoothing: 0.85,
     holdMs: 5000
@@ -41,34 +42,36 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     right: { value: 0, lastUpdate: Date.now() }
   };
 
-  // --- MPX / Spectrum data (used for Pilot + RDS + MPX total) -------
+  // --- MPX / Spectrum data ------------------------------------------
   let mpxSpectrum = [];
   let mpxSmoothSpectrum = [];
 
-  const MPX_DB_MIN   = -70;
+  // WICHTIG: Wir setzen den globalen Boden auf -90 (wie im alten Skript),
+  // damit RDS das schwache Signal sehen kann.
+  // Für MPX Total und Pilot simulieren wir weiter unten künstlich -70,
+  // um deren strenges Verhalten zu bewahren.
+  const MPX_DB_MIN   = -90;
   const MPX_DB_MAX   = 0;
   const MPX_FMAX     = 96000;
   const MPX_AVG      = 6;
 
-  // Soft-smoothing for Pilot, RDS and MPX total meters
+  // Soft-smoothing
   let pilotSmooth    = 0;
   let rdsShortPrev   = 0;
   let rdsLongPrev    = 0;
   let mpxTotalSmooth = 0;
 
   const PILOT_SMOOTHING     = 0.15;
-  const MPX_TOTAL_SMOOTHING = 0.85;  // (kept for possible future use)
+  const MPX_TOTAL_SMOOTHING = 0.85;
 
-  // RDS lock state (DEVA-like with HOLD / anti-flap)
+  // RDS lock state
   let rdsLocked    = false;
-  let rdsLockTimer = 18; // number of frames to keep RDS "locked" (~ stable display)
+  let rdsLockTimer = 18;
 
-  // dB → linear amplitude
   function dbToAmp(db) {
     return Math.pow(10, db / 20);
   }
 
-  // Total power (amplitude^2) inside a frequency band around centerHz
   function bandPower(centerHz, bandHz) {
     if (!mpxSpectrum.length) return 0;
 
@@ -85,14 +88,14 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     let p = 0;
     for (let i = idxMin; i <= idxMax; i++) {
       const db = mpxSpectrum[i];
-      if (!isFinite(db) || db <= MPX_DB_MIN) continue;
+      if (!isFinite(db) || db < MPX_DB_MIN) continue;
       const a = dbToAmp(db);
-      p += a * a;   // Power ~ amplitude^2
+      p += a * a;
     }
     return p;
   }
 
-  // --- RF unit handling (dBf / dBµV / dBm) via global MetricsMonitor -
+  // --- RF unit handling ---------------------------------------------
   let hfUnit = "dbf";
   let hfUnitListenerAttached = false;
 
@@ -104,37 +107,32 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
   }
 
-  // RF conversion (base is dBf, like in the scanner)
-  // dBµV = dBf - 10.875
-  // dBm  = dBf - 119.75
   function hfBaseToDisplay(baseHF) {
     const v = Number(baseHF);
     if (!isFinite(v)) return 0;
     const ssu = (hfUnit || "").toLowerCase();
 
     if (ssu === "dbuv" || ssu === "dbµv" || ssu === "dbμv") {
-      return v - 10.875;          // dBµV
+      return v - 10.875;
     } else if (ssu === "dbm") {
-      return v - 119.75;          // dBm
+      return v - 119.75;
     } else if (ssu === "dbf") {
-      return v;                   // dBf
+      return v;
     }
     return v;
   }
 
-  // Base RF (dBf) → 0..100 % for RF bar (internally mapped to 0..90 dBµV)
   function hfPercentFromBase(baseHF) {
     const v = Number(baseHF);
     if (!isFinite(v)) return 0;
 
-    let dBuV = v - 10.875;       // dBµV
+    let dBuV = v - 10.875;
     if (isNaN(dBuV)) dBuV = 0;
 
     const clamped = Math.max(0, Math.min(90, dBuV));
     return (clamped / 90) * 100;
   }
 
-  // RF scale labels depending on unit
   function buildHFScale(unit) {
     const baseScale_dBuV = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
     const ssu = (unit || hfUnit || "").toLowerCase();
@@ -144,7 +142,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
 
     if (ssu === "dbm") {
-      // dBm = dBµV - 108.875
       return baseScale_dBuV.map((v, idx) => {
         const dBm = v - 108.875;
         const rounded = round10(dBm);
@@ -153,7 +150,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
 
     if (ssu === "dbf") {
-      // dBf = dBµV + 10.875
       return baseScale_dBuV.map((v, idx) => {
         const dBf = v + 10.875;
         const rounded = round10(dBf);
@@ -161,14 +157,13 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       });
     }
 
-    // Default: dBµV
     return baseScale_dBuV.map((v, idx) => {
       const rounded = round10(v);
       return idx === 0 ? `${rounded} dBµV` : `${rounded}`;
     });
   }
 
-  // --- Stereo audio directly from browser (Fallback.Player.Amplification) ---
+  // --- Stereo audio directly from browser ---------------------------
   let stereoAudioContext    = null;
   let stereoSourceNode      = null;
   let stereoSplitter        = null;
@@ -179,7 +174,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   let stereoAnimationId     = null;
   let stereoSetupIntervalId = null;
 
-  function stereoColorForPercent(p /* 0..100 */, totalSegments = 30) {
+  function stereoColorForPercent(p, totalSegments = 30) {
     const i = Math.max(
       0,
       Math.min(totalSegments - 1, Math.round((p / 100) * totalSegments) - 1)
@@ -194,33 +189,19 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
   }
 
-  // Scale labels (LEFT/RIGHT/PILOT/RDS/RF/MPX)
   const scales = {
-    left: [
-      "+5,0 dB",
-      "0,0",
-      "-5,0",
-      "-10,0",
-      "-15,0",
-      "-20,0",
-      "-25,0",
-      "-30,0",
-      "-35,0 dB"
-    ],
+    left: ["+5,0 dB","0,0","-5,0","-10,0","-15,0","-20,0","-25,0","-30,0","-35,0 dB"],
     right: [],
     stereoPilot: ["15,0","13,0","11,0","9,0","7,0","5,0","3,0","1,0","0 kHz"],
-    hf: [], // will be built via buildHFScale(hfUnit)
+    hf: [],
     rds: ["10,0","9,0","8,0","7,0","6,0","5,0","4,0","3,0","2,0","1,0","0 kHz"],
     mpx: ["120,0","105,0","90,0","75,0","60,0","45,0","30,0","15,0","0 kHz"]
   };
 
-  // Peak-hold update for LEFT / RIGHT
-  function updatePeakValue(channel, current /* 0..100 */) {
+  function updatePeakValue(channel, current) {
     const p = peaks[channel];
     if (!p) return;
-
     const now = Date.now();
-
     if (current > p.value) {
       p.value = current;
       p.lastUpdate = now;
@@ -230,8 +211,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
   }
 
-  // Draw peak segment for LEFT / RIGHT
-  function setPeakSegment(meterEl, peak /* 0..100 */, meterId) {
+  function setPeakSegment(meterEl, peak, meterId) {
     const segments = meterEl.querySelectorAll(".segment");
     if (!segments.length) return;
 
@@ -252,9 +232,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
   }
 
-  // -------------------------------------------------------
-  // Meter creation & update (DOM structure identical to EQ)
-  // -------------------------------------------------------
   function createLevelMeter(id, label, container, scaleValues) {
     const levelMeter = document.createElement("div");
     levelMeter.classList.add("level-meter");
@@ -266,14 +243,12 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     meterBar.classList.add("meter-bar");
     meterBar.setAttribute("id", id);
 
-    // 30 vertical segments
     for (let i = 0; i < 30; i++) {
       const segment = document.createElement("div");
       segment.classList.add("segment");
       meterBar.appendChild(segment);
     }
 
-    // Peak marker for LEFT/RIGHT
     if (id.includes("left") || id.includes("right")) {
       const marker = document.createElement("div");
       marker.className = "peak-marker";
@@ -293,7 +268,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     meterWrapper.appendChild(meterBar);
     meterWrapper.appendChild(labelElement);
 
-    // Optional scale ticks
     if (scaleValues && scaleValues.length > 0) {
       const scale = document.createElement("div");
       scale.classList.add("meter-scale");
@@ -310,7 +284,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     container.appendChild(levelMeter);
   }
 
-  // Update meter segments and colors
   function updateMeter(meterId, level) {
     const meter = document.getElementById(meterId);
     if (!meter) return;
@@ -328,7 +301,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     const activeCount = Math.round((safeLevel / 100) * segments.length);
 
     segments.forEach((seg, i) => {
-      // If a meter is disabled, keep it dark gray (no color)
       if (rdsDisabled || pilotDisabled || mpxDisabled) {
         seg.style.backgroundColor = "#333";
         return;
@@ -336,7 +308,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
       if (i < activeCount) {
         if (meterId.includes("left") || meterId.includes("right")) {
-          // Stereo: green → red at top segments
           if (i >= segments.length - 5) {
             const red = Math.round((i / 10) * 125);
             seg.style.backgroundColor = `rgb(${red},0,0)`;
@@ -345,7 +316,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
             seg.style.backgroundColor = `rgb(0,${green},0)`;
           }
         } else if (isPilot) {
-          // Pilot: green → red depending on deviation
           if (i < segments.length * 0.5) {
             const green = 100 + Math.round((i / (segments.length * 0.5)) * 155);
             seg.style.backgroundColor = `rgb(0,${green},0)`;
@@ -355,7 +325,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
             seg.style.backgroundColor = `rgb(${red},0,0)`;
           }
         } else if (isRds) {
-          // RDS deviation color logic (green → yellow → red)
           const rdsThresholdIndex1 = Math.round((2.5 / 10) * segments.length);
           const rdsThresholdIndex2 = Math.round((3.5 / 10) * segments.length);
           if (i < rdsThresholdIndex1) {
@@ -373,29 +342,23 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
             seg.style.backgroundColor = `rgb(${red},0,0)`;
           }
         } else if (isMpx) {
-          // MPX total: 0..75 kHz green, 75..80 kHz yellow, 80..120 kHz red
           const kHzMax       = 120;
           const idxGreenMax  = Math.round((75 / kHzMax) * segments.length);
           const idxYellowMax = Math.round((80 / kHzMax) * segments.length);
-
           if (i < idxGreenMax) {
-            // Green gradient like LEFT/RF
             const green = 100 + Math.round((i / Math.max(1, idxGreenMax - 1)) * 155);
             seg.style.backgroundColor = `rgb(0,${green},0)`;
           } else if (i < idxYellowMax) {
-            // Yellow transition area
             const pos = (i - idxGreenMax) / Math.max(1, idxYellowMax - idxGreenMax);
             const yellowIntensity = 255 - Math.round(pos * 60);
             seg.style.backgroundColor =
               `rgb(${yellowIntensity + 150}, ${yellowIntensity}, 0)`;
           } else {
-            // Red area – same red gradient as the other meters
             const pos = (i - idxYellowMax) / Math.max(1, segments.length - idxYellowMax);
             const red = 225 - Math.round(pos * 155);
             seg.style.backgroundColor = `rgb(${red},0,0)`;
           }
         } else if (meterId.includes("hf")) {
-          // RF color logic: low RF = more red, high RF = more green
           const hfThresholdIndex = Math.round((20 / 90) * segments.length);
           if (i < hfThresholdIndex) {
             const pos = i / hfThresholdIndex;
@@ -406,7 +369,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
             seg.style.backgroundColor = `rgb(0,${green},0)`;
           }
         } else {
-          // Generic meter color fallback
           if (i < segments.length * 0.6) {
             seg.style.backgroundColor = "#4caf50";
           } else if (i < segments.length * 0.8) {
@@ -416,12 +378,10 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
           }
         }
       } else {
-        // Inactive segment
         seg.style.backgroundColor = "#333";
       }
     });
 
-    // Peak hold for LEFT / RIGHT
     if (meterId.includes("left") || meterId.includes("right")) {
       const channel = meterId.includes("left") ? "left" : "right";
       updatePeakValue(channel, safeLevel);
@@ -430,16 +390,37 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   }
 
   // ---------------------------------------------------------------
-  // MPX data → smoothed dB spectrum
+  // Robust MPX data parsing (from FIX)
   // ---------------------------------------------------------------
   function handleMpxArray(data) {
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (!data || (!Array.isArray(data) && !(data instanceof Float32Array) && !(data instanceof Uint8Array))) {
+      return;
+    }
+
+    const mags = [];
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
+      let mag = 0;
+
+      if (typeof item === "number") {
+        mag = item;
+      }
+      else if (item && typeof item === "object") {
+        if (typeof item.m === "number") mag = item.m;
+        else if (typeof item.mag === "number") mag = item.mag;
+        else if (Array.isArray(item) && typeof item[0] === "number") {
+           const re = item[0], im = item[1];
+           mag = Math.sqrt(re * re + im * im);
+        }
+      }
+
+      if (!isFinite(mag) || mag < 0) mag = 0;
+      mags.push(mag);
+    }
 
     const arr = [];
-    for (let i = 0; i < data.length; i++) {
-      const mag = (data[i] && typeof data[i].m === "number") ? data[i].m : 0;
-      let db = 20 * Math.log10(mag + 1e-15);
-
+    for (let i = 0; i < mags.length; i++) {
+      let db = 20 * Math.log10(mags[i] + 1e-15);
       if (db < MPX_DB_MIN) db = MPX_DB_MIN;
       if (db > MPX_DB_MAX) db = MPX_DB_MAX;
       arr.push(db);
@@ -468,22 +449,20 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   }
 
   // ---------------------------------------------------------------
-  // 19 kHz Pilot — DEVA-like detection with RF gating + noise check
+  // Pilot — Strict logic preserved (Original New State)
   // ---------------------------------------------------------------
   function updatePilotFromSpectrum() {
-
     if (!PILOT_ENABLED) {
       pilotSmooth = 0;
       levels.stereoPilot = 0;
       updateMeter("stereo-pilot-meter", 0);
       return;
     }
-
     if (!mpxSpectrum.length) return;
 
     const F_PILOT  = 19000;
-    const PILOT_BW = 1600;   // softer bandwidth (±800 Hz around 19 kHz)
-    const NOISE_BW = 3000;   // mid-band noise window
+    const PILOT_BW = 1600;
+    const NOISE_BW = 3000;
 
     const P_pilot = bandPower(F_PILOT, PILOT_BW);
     const P_noise = bandPower(25000, NOISE_BW);
@@ -491,25 +470,19 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     const pilotDb = 10 * Math.log10(P_pilot + 1e-15);
     const noiseDb = 10 * Math.log10(P_noise + 1e-15);
 
-    // ---------------------------------------------------------
-    // 1) RF gating – but soft (DX-friendly)
-    // ---------------------------------------------------------
-    const HF_THRESHOLD_PERCENT = 12;   // softer RF gating threshold
+    // 1) RF gating (Strict)
+    const HF_THRESHOLD_PERCENT = 12;
     const hfPercent = Number(levels.hf) || 0;
 
     if (hfPercent < HF_THRESHOLD_PERCENT) {
-      // gently fade out pilot instead of hard zero
       pilotSmooth *= 0.92;
       levels.stereoPilot = pilotSmooth;
       updateMeter("stereo-pilot-meter", pilotSmooth);
       return;
     }
 
-    // ---------------------------------------------------------
-    // 2) Pilot must be above noise – but soft
-    // ---------------------------------------------------------
-    const MIN_SNR_DB = 1.2;   // mild SNR requirement
-
+    // 2) SNR check (Strict)
+    const MIN_SNR_DB = 1.2;
     if (pilotDb < noiseDb + MIN_SNR_DB) {
       pilotSmooth *= 0.92;
       levels.stereoPilot = pilotSmooth;
@@ -517,11 +490,8 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       return;
     }
 
-    // ---------------------------------------------------------
-    // 3) Ratio check – very tolerant (avoids purely flat noise)
-    // ---------------------------------------------------------
+    // 3) Ratio check (Strict)
     const ratio = Math.sqrt(P_pilot) / Math.sqrt(P_noise);
-
     if (ratio < 1.1) {
       pilotSmooth *= 0.92;
       levels.stereoPilot = pilotSmooth;
@@ -529,13 +499,9 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       return;
     }
 
-    // ---------------------------------------------------------
-    // 4) Compute deviation (kHz)
-    // ---------------------------------------------------------
-    const PILOT_DEV_MAX_KHZ   = 8.0;  // typical pilot deviation range
-    const PILOT_SCALE_MAX_KHZ = 15.0; // meter scale upper end
+    const PILOT_DEV_MAX_KHZ   = 8.0;
+    const PILOT_SCALE_MAX_KHZ = 15.0;
 
-    // Normalize roughly from -85..0 dB
     let norm = (pilotDb + 85) / 85;
     if (norm < 0) norm = 0;
     if (norm > 1) norm = 1;
@@ -545,29 +511,24 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     if (percent > 100) percent = 100;
     if (percent < 0)   percent = 0;
 
-    // Smooth pilot meter (attack/decay)
     pilotSmooth = pilotSmooth * 0.88 + percent * 0.12;
-
     levels.stereoPilot = pilotSmooth;
     updateMeter("stereo-pilot-meter", pilotSmooth);
   }
 
   // ---------------------------------------------------------------
-  // RDS detector — DEVA-like with HOLD / anti-flap
+  // RDS — RELAXED Logic to make it work like old script
   // ---------------------------------------------------------------
   function updateRdsFromSpectrum() {
-
     if (!RDS_ENABLED) {
       updateMeter("rds-meter", 0);
       levels.rds = 0;
       return;
     }
-
     if (!mpxSpectrum.length) return;
 
     const F_PILOT = 19000;
     const F_RDS   = 57000;
-
     const PILOT_BW = 1800;
     const RDS_BW   = 1200;
 
@@ -579,45 +540,32 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     const noiseDb = 10 * Math.log10(noise  + 1e-15);
     const pilotDb = 10 * Math.log10(P_pilot + 1e-15);
 
-    // -------------------------------
-    // 1) Pilot must exist at all
-    // -------------------------------
-    const PILOT_ON = (pilotDb > -35);   // allow relatively weak pilot
+    // FIX: Hier die Schwelle auf -70 gesenkt (im strengen Skript war sie -35)
+    const PILOT_ON = (pilotDb > -70);
 
-    // -------------------------------
-    // 2) RDS > noise (soft, dynamic)
-    // -------------------------------
-    const RDS_DETECTED = (rdsDb > noiseDb + 0.1);
+    // FIX: Noise Check relaxter handhaben
+    const RDS_DETECTED = (rdsDb > noiseDb + 0.05);
 
-    // -------------------------------
-    // 3) Minimal RDS/Pilot ratio (very soft)
-    // -------------------------------
+    // Ratio check
     const ratio    = Math.sqrt(P_rds) / Math.sqrt(P_pilot);
-    const ratioMin = 0.008;   // ~0.8% minimal
+    const ratioMin = 0.005; // etwas relaxter als 0.008
     const RATIO_OK = (ratio > ratioMin);
 
-    // ============================================================
-    // 4) RDS lock decision (with HOLD / anti-flap)
-    // ============================================================
     let newLock = false;
-
-    // Conditions for a valid RDS lock
     if (PILOT_ON && RDS_DETECTED && RATIO_OK) newLock = true;
 
     if (newLock) {
       rdsLocked    = true;
-      rdsLockTimer = 18; // hold RDS for N frames to make the display stable
+      rdsLockTimer = 18;
     } else {
-      // If no new RDS frame, run down the hold timer
       if (rdsLockTimer > 0) {
         rdsLockTimer--;
-        newLock = true;  // still show RDS while the timer is running
+        newLock = true;
       } else {
         rdsLocked = false;
       }
     }
 
-    // If finally no RDS → fade out smoothly instead of jumping to 0
     if (!newLock) {
       rdsShortPrev *= 0.92;
       rdsLongPrev  *= 0.96;
@@ -626,9 +574,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       return;
     }
 
-    // ============================================================
-    // 5) RDS deviation estimate
-    // ============================================================
     const PILOT_DEV = 9.0;
     let dev = ratio * PILOT_DEV;
 
@@ -639,15 +584,11 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     if (percent > 100) percent = 100;
     if (percent < 0)   percent = 0;
 
-    // ============================================================
-    // 6) Double smoothing (DEVA-like, slow + stable)
-    // ============================================================
     const SHORT = 0.65;
     const LONG  = 0.93;
 
     const s1 = percent * (1 - SHORT) + rdsShortPrev * SHORT;
     rdsShortPrev = s1;
-
     const s2 = rdsLongPrev * LONG + s1 * (1 - LONG);
     rdsLongPrev = s2;
 
@@ -656,19 +597,12 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   }
 
   // ---------------------------------------------------------------
-  // MPX total modulation (DEVA-like, with RF/Pilot gating)
-  //
-  //  • Based on the MPX spectrum (0..60 kHz)
-  //  • Only shows MPX when RF and Pilot indicate a real signal
-  //  • On noise / no signal → MPX = 0
-  //  • Slightly boosted so full-scale is easier to see
-  //  • Double-smoothing for a calm, DEVA-like display
+  // MPX Total — Strict logic preserved
   // ---------------------------------------------------------------
-  let mpxPercentPrev = 0;   // Short smoothing state
+  let mpxPercentPrev = 0;
 
   function updateMpxTotalFromSpectrum() {
     if (!MPX_ENABLED) {
-      // MPX meter is not valid for this sample rate → force 0
       mpxPercentPrev  = 0;
       mpxTotalSmooth  = 0;
       levels.mpxTotal = 0;
@@ -678,20 +612,15 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
     if (!mpxSpectrum.length) return;
 
-    // -----------------------------------------------------------
-    // 0) Professional "No Signal" gating
-    //    → without RF and Pilot there is NO MPX at all
-    // -----------------------------------------------------------
-    const HF_THRESHOLD_PERCENT    = 25; // RF < 25% = no station
-    const PILOT_THRESHOLD_PERCENT = 5;  // Pilot < 5% = no pilot lock
+    // 0) Strict "No Signal" gating
+    const HF_THRESHOLD_PERCENT    = 25;
+    const PILOT_THRESHOLD_PERCENT = 5;
 
-    const hfPercent  = Number(levels.hf) || 0;          // 0..100 %
-    const pilotLevel = Number(levels.stereoPilot) || 0; // 0..100 %
+    const hfPercent  = Number(levels.hf) || 0;
+    const pilotLevel = Number(levels.stereoPilot) || 0;
 
     if (hfPercent < HF_THRESHOLD_PERCENT ||
         pilotLevel < PILOT_THRESHOLD_PERCENT) {
-
-      // Reset everything like professional devices do on "No Signal"
       mpxPercentPrev  = 0;
       mpxTotalSmooth  = 0;
       levels.mpxTotal = 0;
@@ -699,22 +628,23 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       return;
     }
 
-    // -----------------------------------------------------------
-    // 1) Average dB over the 0..60 kHz baseband area
-    // -----------------------------------------------------------
     const N       = mpxSpectrum.length;
-    const maxFreq = MPX_FMAX;      // e.g. 96000 Hz
-    const fLimit  = 60000;         // integrate 0..60 kHz region
+    const maxFreq = MPX_FMAX;
+    const fLimit  = 60000;
 
     let sumDb = 0;
     let count = 0;
+
+    // Strict filtering simulation: -70 dB threshold applied here
+    const STRICT_THRESHOLD = -70;
 
     for (let i = 0; i < N; i++) {
       const freq = (i / (N - 1)) * maxFreq;
       if (freq > fLimit) break;
 
       const db = mpxSpectrum[i];
-      if (!isFinite(db) || db < -140) continue;
+      // Ignore weak signals here to maintain "Strict" MPX behavior
+      if (!isFinite(db) || db < STRICT_THRESHOLD) continue;
 
       sumDb += db;
       count++;
@@ -729,56 +659,43 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
 
     const avgDb = sumDb / count;
-
-    // -----------------------------------------------------------
-    // 2) DEVA-like MPX mapping
-    //    -80 dB → 0 kHz, -60 → 25, -50 → 40, -40 → 60,
-    //    -30 → 80, -20 → 100 kHz
-    // -----------------------------------------------------------
     let devKHz;
 
     if (avgDb < -60) {
-      devKHz = (avgDb + 80) * (25 / 20);           // 0..25 kHz
+      devKHz = (avgDb + 80) * (25 / 20);
     } else if (avgDb < -50) {
-      devKHz = 25 + ((avgDb + 60) * (15 / 10));    // 25..40 kHz
+      devKHz = 25 + ((avgDb + 60) * (15 / 10));
     } else if (avgDb < -40) {
-      devKHz = 40 + ((avgDb + 50) * (20 / 10));    // 40..60 kHz
+      devKHz = 40 + ((avgDb + 50) * (20 / 10));
     } else if (avgDb < -30) {
-      devKHz = 60 + ((avgDb + 40) * (20 / 10));    // 60..80 kHz
+      devKHz = 60 + ((avgDb + 40) * (20 / 10));
     } else {
-      devKHz = 80 + ((avgDb + 30) * (20 / 10));    // 80..100 kHz
+      devKHz = 80 + ((avgDb + 30) * (20 / 10));
     }
 
-    // Clamp deviation
     if (devKHz < 0)   devKHz = 0;
     if (devKHz > 120) devKHz = 120;
-
-    // Slight boost so the meter uses more of the scale
-    devKHz *= 1.30;   // adjust boost factor as needed
+    devKHz *= 1.30;
 
     let percent = (devKHz / 120) * 100;
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
 
-    // -----------------------------------------------------------
-    // 3) DEVA-like double smoothing
-    // -----------------------------------------------------------
-    const shortSmoothFactor = 0.75;   // short-term smoothing (0..1)
+    const shortSmoothFactor = 0.75;
     percent = percent * (1 - shortSmoothFactor) +
               mpxPercentPrev * shortSmoothFactor;
     mpxPercentPrev = percent;
 
-    const longSmoothFactor = 0.93;    // long-term smoothing (0..1)
+    const longSmoothFactor = 0.93;
     mpxTotalSmooth = mpxTotalSmooth * longSmoothFactor +
                      percent * (1 - longSmoothFactor);
 
     levels.mpxTotal = mpxTotalSmooth;
-
     updateMeter("mpx-meter", mpxTotalSmooth);
   }
 
   // ---------------------------------------------------------------
-  // Stereo audio meters: direct audio from browser
+  // Stereo audio meters
   // ---------------------------------------------------------------
   function setupAudioMeters() {
     if (
@@ -843,7 +760,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     }
   }
 
-  // Main animation loop for LEFT/RIGHT audio meters
   function startStereoAnimation() {
     if (stereoAnimationId) cancelAnimationFrame(stereoAnimationId);
 
@@ -887,7 +803,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   }
 
   // ---------------------------------------------------------------
-  // WebSocket for MPX / RDS / Pilot data
+  // WebSocket
   // ---------------------------------------------------------------
   function setupMetricsWebSocket() {
     const currentURL    = window.location;
@@ -934,7 +850,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
   }
 
   // ---------------------------------------------------------------
-  // INIT – create LEFT / RIGHT / RF / PILOT / MPX / RDS meters
+  // INIT
   // ---------------------------------------------------------------
   function initMeters(levelMeterContainer) {
     const container = levelMeterContainer;
@@ -942,7 +858,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
     container.innerHTML = "";
 
-    // Stereo group (LEFT / RIGHT), similar to the equalizer layout
     const stereoGroup = document.createElement("div");
     stereoGroup.classList.add("stereo-group");
 
@@ -951,22 +866,18 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
     container.appendChild(stereoGroup);
 
-    // RF meter with dynamic scale depending on global RF unit
     const hfScale = buildHFScale(hfUnit);
     createLevelMeter("hf-meter", "RF", container, hfScale);
 
     const hfLevelMeter = container.querySelector("#hf-meter")?.closest(".level-meter");
     if (hfLevelMeter) {
-      // Small horizontal offset to align with layout
       hfLevelMeter.style.transform = "translateX(-5px)";
     }
 
-    // Additional meters: PILOT, MPX total & RDS
     createLevelMeter("stereo-pilot-meter", "PILOT", container, scales.stereoPilot);
     createLevelMeter("mpx-meter",          "MPX",   container, scales.mpx);
     createLevelMeter("rds-meter",          "RDS",   container, scales.rds);
 
-    // Visually grey out disabled meters (Pilot / RDS / MPX)
     const pilotMeterEl = container.querySelector("#stereo-pilot-meter")?.closest(".level-meter");
     if (pilotMeterEl && !PILOT_ENABLED) {
       pilotMeterEl.style.opacity = "0.4";
@@ -982,7 +893,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       mpxMeterEl.style.opacity = "0.4";
     }
 
-    // Initial values
     updateMeter("left-meter",  levels.left       || 0);
     updateMeter("right-meter", levels.right      || 0);
     updateMeter("hf-meter",    levels.hf         || 0);
@@ -990,14 +900,12 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     updateMeter("mpx-meter",   levels.mpxTotal   || 0);
     updateMeter("rds-meter",   levels.rds        || 0);
 
-    // WebSocket & audio setup
     setupMetricsWebSocket();
     setupAudioMeters();
     if (!stereoSetupIntervalId) {
       stereoSetupIntervalId = setInterval(setupAudioMeters, 3000);
     }
 
-    // Listen ONCE for RF unit changes from global MetricsMonitor
     if (!hfUnitListenerAttached &&
         window.MetricsMonitor &&
         typeof window.MetricsMonitor.onSignalUnitChange === "function") {
@@ -1024,10 +932,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       return stereoBoost;
     },
 
-    // NOTE:
-    // stereoBoost is defined as const in the header and patched via config.
-    // If you want to make it fully runtime-adjustable, change the header
-    // declaration to "let stereoBoost = X;" and uncomment the assignment below.
     setStereoBoost(value) {
       const v = Number(value);
       if (!isNaN(v) && v > 0) {
@@ -1035,9 +939,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       }
     },
 
-    // RF is passed in BASE unit (dBf) like in the scanner:
-    // -> display unit converted via hfUnit
-    // -> bar level internally mapped from 0..90 dBµV to 0..100 %
     setHF(baseValue) {
       const v = Number(baseValue);
       if (!isFinite(v)) return;
@@ -1051,7 +952,6 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       updateMeter("hf-meter", percent);
     },
 
-    // Change RF unit at runtime (triggered from loader / dropdown)
     setHFUnit(unit) {
       console.log("[MetricsMeters] setHFUnit() :: new unit =", unit);
 
