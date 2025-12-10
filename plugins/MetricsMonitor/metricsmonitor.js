@@ -65,7 +65,7 @@ const MODULE_SEQUENCE = [1,2,0,3];    // Do not touch - this value is automatica
   // Plugin version + update check configuration
   // ---------------------------------------------------------
 
-  const plugin_version = '1.1a'; 
+  const plugin_version = '1.2'; 
   const updateInfo     = true;   
 
   const plugin_name = 'MetricsMonitor';
