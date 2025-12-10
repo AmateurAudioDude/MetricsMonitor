@@ -92,7 +92,8 @@ After making changes to the metricsmonitor.json script, the server must be resta
 ## MPX Equipment
 
 ### ESP32 Receiver
-Make sure the correct PE5PVB firmware is installed. You can either use the software-based MPX switching ("MPXmode": "auto" or "on") or you can permanently activate the MPX output in the audio settings menu.
+
+Make sure the correct PE5PVB firmware is installed. You can either use the software-based MPX switching ("MPXmode": "auto" or "on") or you can permanently activate the MPX output in the audio settings menu. MPX software switching for ESP32 TEF receivers has been added with the new [BETA firmware v2.20.5](https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip). Three modes are available (see configuration options!)
 
 ### Headless TEF
 If the Headless TEF has a line-level audio output, the MPX output can be permanently enabled via a jumper on the board. It is recommended to output the signal to a 192kHz compatible sound card, which is then configured as "MPXInputCard": "plughw:CARD=Device" (Linux) or : "Microphone (HD USB Audio Device)" (Windows). Normal mono/stereo sound output continues to be handled by the i2s USB sound interface.
