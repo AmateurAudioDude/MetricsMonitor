@@ -2,12 +2,19 @@
 
 FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equalizers and spectrum analyzer for FM audio, FM baseband and MPX signal.
 
+<img width="1623" height="290" alt="1" src="https://github.com/user-attachments/assets/34a4fb52-b436-4efa-8f21-29ffc559ee86" />
 
-<img width="1260" height="306" alt="start" src="https://github.com/user-attachments/assets/863202ce-d88d-46c7-9d9f-be3c52b49228" />
+## v1.2
 
-## v1.1a
-
-- Fixed incorrect display of TA, TP and RDS
+- Additional  sound card for only MPX encoding can be activated
+- A new variable "ExtStereoDecoder" has been added to also activate the mono/stereo signaling when using a ext. stereo decoder e.q. MPX Tool
+- Optimization & fix calibration of level and analysis displays, the values ​​can be individually calibrated in the JSON file
+- Volume control can now be activated if needed
+- MPX Encode Script for 96/192 kHz sampling under Linux (Thanks to <@840861090375401501> )
+- Headless TEF software switching Mono <> Stereo <> MPX
+- Various zoom options for analyzer display (press STRG Button for options!)
+- Discreet real-time display of measured values ​​above the bar graph display
+- MPX Mode display integrated
 
 ## Installation notes
 
@@ -26,62 +33,86 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 The following variables can be changed in the metricsmonitor.json config file:
 
-    "sampleRate": 48000,          //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
-	"fftSize": 512,               //  Here you can change the frequency sampling rate for the spectrum display. The higher the value (e.g., 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
-	"minSendIntervalMs": 30       //  Here you can change the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
-	"MPXmode: "off"               //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
-	"SpectrumAverageLevel": 15    //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
-    "stereoBoost": 1,             //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
-    "eqBoost": 1,                 //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
-    "MODULE_SEQUENCE": "1, 2, 0"  // Here you can set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer. Single values ​​or comma-separated values ​​can be entered ("1, 2, 0" - default).
+    "sampleRate": 48000,             //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
+	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
+	"SpectrumAverageLevel": 15,      //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
+	"minSendIntervalMs": 30,         //  Cchange the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
+    "pilotCalibration": 2,           //  Calibrate the +/- level value for the Pilot level indicator (default = 2)
+    "mpxCalibration": 54,            //  Calibrate the +/- level value for the MPX level indicator (default = 54)
+    "rdsCalibration": 1.25,          //  Calibrate the +/- level value for the RDS level indicator (default = 1.25)
+    "Curve-Y-Offset": -40,           //  Set the +/- level value for the analyzing curve offset (default = -40)
+    "Curve-Y-Dynamics": 1.9,         //  Set the +/- level value for the analyzing curve dynamic (peak indication / default = 1.9)
+    "MPXmode": "auto",               //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer and signal meter module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
+    "MPXStereoDecoder": "off",	     //  Set the switch to "on" if you are decoding the stereo signal from MPX with a stereo decoder. This will enable the optical mono/stereo indicator to function when MPXmode is set to "on". The default setting is "off".          
+    "MPXInputCard": "",              //  Configure the sound input exclusive to MPX (e.g., for Linux: "plughw:CARD=Device" or Windows: "Microphone (HD USB Audio Device)")
+	"stereoBoost": 1,                //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
+    "eqBoost": 1,                    //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
+    "MODULE_SEQUENCE": "1, 2, 0, 3"  //  Set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer / 3 - Audio + Signal Strength. Single values ​​or comma-separated values ​​can be entered: "0, 4" or "4" etc. ("1, 2, 0, 4" - default).
+    "LockVolumeSlider": true         //  The locked volume control in the browser can be unlocked if needed, but this will affect the measured values ​​(default is true).
 
-After making changes to the metricsmonitor.json script, the server must be restarted!!!
+
+After making changes to the metricsmonitor.json script, the server must be restarted and browser must be reloaded!!!
+
+## Hardware Configuration Recommendations
+<img width="320" height="240" src="https://github.com/user-attachments/assets/d376ee3c-1bb8-4d35-a8ab-a6ebb9605cb0" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/0921e9e6-3bf7-4fb3-b270-453994ef2032" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/76d4f89a-d588-496d-9ce0-0384b791673b" />
 
 ## Display modes
 
-### Input: 48 kHz Mono/Stereo
-<img width="800" height="194" alt="1a" src="https://github.com/user-attachments/assets/51504f0d-2c46-41d4-9f39-2f31b9bfbabb" />
 
-    1 – MO/ST without PILOT/MPX/RDS      2 – only spectrum to 48 kHz          0 – MO/ST with Equalizer
+### Input: 48 kHz Mono/Stereo
+
+<img width="1431" height="263" alt="2a" src="https://github.com/user-attachments/assets/93c04fe6-7959-4d96-b3ca-bbc4bdb8034f" />
+
+
+    1 – MO/ST without PILOT/MPX/RDS    2 – only spectrum to 48 kHz       0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
   
 ### Input: 48 kHz MPX
 
-<img width="800" height="194" alt="2" src="https://github.com/user-attachments/assets/e0d06c50-a484-4cc0-aaa7-7b93ac55e3d4" />
+<img width="1603" height="290" alt="2b" src="https://github.com/user-attachments/assets/7e18d79c-2a3b-40dd-af25-ef7c712b7537" />
 
-    1 – Mono without PILOT/MPX/RDS    2 – spectrum to 48 kHz with PILOT       0 – MO/ST with Equalizer
+
+    1 – Mono without PILOT/MPX/RDS   2 – spectrum to 48 kHz with PILOT    0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
 
 ### Input: 96 kHz MPX
 
-<img width="800" height="190" alt="5" src="https://github.com/user-attachments/assets/164aa43a-c2f4-4f4b-8f64-8b72b89d6264" />
+<img width="1456" height="260" alt="3a" src="https://github.com/user-attachments/assets/6b724383-981a-4922-92c7-c0565391c9a6" />
 
 
-       1 – Mono without MPX/RDS       2 – spectrum to 38 kHz with PILOT       0 – MO/ST with Equalizer
+       1 – Mono without MPX/RDS     2 – spectrum to 38 kHz with PILOT     0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
 
 ### Input: 192 kHz MPX
 
-<img width="800" height="194" alt="4" src="https://github.com/user-attachments/assets/0f67b21d-2184-47dd-b75e-747f46815a49" />
+<img width="1448" height="266" alt="4a" src="https://github.com/user-attachments/assets/7bbfba6a-37e5-44a5-86f4-496c60ae2267" />
 
-     1 – Mono with PILOT/MPX/RDS    2 – spectrum to 56 kHz with PILOT/RDS     0 – MO/ST with Equalizer
 
-## MPX mode
+     1 – Mono with PILOT/MPX/RDS   2 – spectrum to 56 kHz with PILOT/RDS   0 – MO/ST with Equalizer     3 – MO/ST with Signal strength
+
+## MPX Equipment
 
 ### ESP32 Receiver
-Once the PE5PVB firmware is installed, enable the MPX output in the audio settings menu
+Make sure the correct PE5PVB firmware is installed. You can either use the software-based MPX switching ("MPXmode": "auto" or "on") or you can permanently activate the MPX output in the audio settings menu.
 
 ### Headless TEF
-If the Headless TEF has an line audio output, the MPX output can be activated via a jumper on the board
+If the Headless TEF has a line-level audio output, the MPX output can be permanently enabled via a jumper on the board. It is recommended to output the signal to a 192kHz compatible sound card, which is then configured as "MPXInputCard": "plughw:CARD=Device" (Linux) or : "Microphone (HD USB Audio Device)" (Windows). Normal mono/stereo sound output continues to be handled by the i2s USB sound interface.
+
+### MPX Tool & Co.
+Anyone wishing to perform stereo decoding using MPX Tool or similar should use the settings "MPXmode": "on" and "MPXStereoDecoder": "on". This will result in permanent MPX output and stereo signaling on the display.
 
 ## Important notes
 
-- To activate the audio output and equalizer, press the Play button!
-- To avoid distorting the measurement results, the volume control is deactivated after the plugin is installed!
-- The function of the modules depends on the sound input and the data rate used:
-  0 = 48 kHz signal (mono or stereo) is sufficient.
-  1 = Minimum 96 kHz signal is required for the pilot tone display; a 192 kHz signal is required for MPX and RDS display. For both sample rates, the receiver must support MPX output (activate via the menu if necessary).
-  2 = 48 kHz displays the FM audio spectrum up to 19 kHz, 96 kHz displays the FM baseband up to 38 kHz, and 192 kHz displays the MPX spectrum up to 56 kHz. For both sample rates (96 + 192 kHz), the receiver must support MPX output (activate via the menu if necessary).
-- The configuration file allows individual display modules to be switched on or off and the click sequence to be determined.
-- It cannot be guaranteed that the plugin is compatible with all hardware components and platforms.
-- The receiver's output volume setting also affects the display behavior and must be taken into account
+- Press the play button to activate the audio output and equalizer.
+- To avoid distorting the measurement results, the volume control is disabled after the plugin is installed! You can re-enable it via the configuration if needed.
+- The function of the modules depends on the input signal and the data rate used:
+  0/3 = 48 kHz signal (mono or stereo) is sufficient.
+  1 = Signal of at least 96 kHz is required for the pilot tone display; a 192 kHz signal is required for the MPX and RDS displays. For both sampling rates, the receiver must support MPX output (activate via the menu if necessary).
+  2 = 48 kHz displays the FM audio spectrum up to 19 kHz, 96 kHz the FM baseband up to 38 kHz, and 192 kHz the MPX spectrum up to 56 kHz. For both sampling rates (96 and 192 kHz), the receiver must support MPX output (activate this via the menu or configuration if necessary).
+
+- The configuration file allows you to switch individual display modules on and off and define the click sequence. The various displays can also be calibrated there.
+- Press the CTRL key to select different zoom options in analysis mode
+
+Compatibility with all hardware components and platforms cannot be guaranteed. The receiver's output volume, as well as the technical characteristics of the hardware components, affect the display behavior and must be taken into account!!!
 
 ## Contact
 
@@ -91,6 +122,10 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v1.1a
+
+- Fixed incorrect display of TA, TP and RDS
 
 ### v1.1
 
@@ -105,3 +140,4 @@ If you have any questions, would like to report problems, or have suggestions fo
 ### v1.0
 
 - Three display modes: Audio + PILOT/MPX/RDS spectrum analysis / Audio + equalizer (Switching is done by clicking on the display)
+# TEST

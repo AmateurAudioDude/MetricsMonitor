@@ -4,7 +4,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin: 0;
+   margin-top: -4px; 
 }
 
 /* Top section: scale + bar side by side */
@@ -24,6 +24,8 @@
   color: #aaa;
   margin-right: 4px;
   text-align: right;
+  position: relative; /* Hinzugefügt */
+  top: 15px;           /* Hinzugefügt: Passen Sie diesen Wert bei Bedarf an */
 }
 
 /* Wrapper for one meter bar (keeps bar and label together) */
@@ -63,6 +65,7 @@
   text-align: center;
   width: 100%;
   color: #fff;
+  margin-top: -1px; 
 }
 
 /* --- STEREO GROUP ---------------------------------------- */
@@ -98,4 +101,9 @@
   align-items: flex-end;
   width: 100%;
   transform: translateX(-8px) translateY(10px); /* shift the whole group */
+}
+
+/* Spezifische Verschiebung für das PILOT-Label */
+.level-meter:has(#stereo-pilot-meter) .label {
+  transform: translateX(-3px);
 }

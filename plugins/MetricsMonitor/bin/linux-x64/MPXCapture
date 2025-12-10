@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+#
+# MPXCapture.sh — ALSA/arecord-based replacement for MPXCapture on Linux.
+# Emits interleaved Float32 stereo PCM to stdout.
+# Usage: MPXCapture.sh [sampleRate] [device-substring]
+
+set -euo pipefail
+
+DEFAULT_SR=192000
+MAX_LEVELS=10
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+find_config() {
+  local dir="$script_dir"
+  for ((i=0; i<MAX_LEVELS; i++)); do
+    if [[ -f "$dir/config.json" ]]; then
+      echo "$dir/config.json"
+      return 0
+    fi
+    local parent
+    parent="$(dirname "$dir")"
+    [[ "$parent" == "$dir" ]] && break
+    dir="$parent"
+  done
+  return 1
+}
+
+config_path="$(find_config || true)"
+root_dir=""
+if [[ -n "$config_path" ]]; then
+  root_dir="$(dirname "$config_path")"
+fi
+
+device_filter=""
+sample_rate="$DEFAULT_SR"
+
+# Load defaults from config.json (audioDevice)
+if [[ -n "$config_path" ]]; then
+  device_filter="$(python3 - <<'PY' "$config_path" 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, "r"))
+    val = data.get("audio", {}).get("audioDevice", "")
+    if val:
+        print(val.strip())
+except Exception:
+    pass
+PY
+)"
+fi
+
+# Load sampleRate from plugins_configs/metricsmonitor.json if present
+if [[ -n "$root_dir" ]]; then
+  mm_path="$root_dir/plugins_configs/metricsmonitor.json"
+  if [[ -f "$mm_path" ]]; then
+    sr_val="$(python3 - <<'PY' "$mm_path" 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, "r"))
+    sr = data.get("sampleRate")
+    if isinstance(sr, str):
+        try:
+            sr = int(sr.strip())
+        except Exception:
+            sr = None
+    if isinstance(sr, (int, float)) and sr > 0:
+        print(int(sr))
+except Exception:
+    pass
+PY
+)"
+    if [[ -n "${sr_val:-}" ]]; then
+      sample_rate="$sr_val"
+    fi
+  fi
+fi
+
+# Args: [sampleRate] [device]
+if [[ $# -ge 1 && -n "${1:-}" ]]; then
+  if [[ "${1:-}" =~ ^[0-9]+$ && "$1" -gt 0 ]]; then
+    sample_rate="$1"
+    shift
+  fi
+fi
+
+if [[ $# -ge 1 && -n "${1:-}" ]]; then
+  device_filter="${1//\"/}"
+  device_filter="${device_filter//\'/}"
+  shift
+fi
+
+if [[ -z "$device_filter" ]]; then
+  echo "[MPXCapture.sh] No audio device specified (arg 2 or config.json)." >&2
+  exit 1
+fi
+
+echo "[MPXCapture.sh] Target sampleRate=${sample_rate} Hz" >&2
+echo "[MPXCapture.sh] Device filter=\"${device_filter}\"" >&2
+
+if ! command -v arecord >/dev/null 2>&1; then
+  echo "[MPXCapture.sh] arecord not found. Install ALSA utils." >&2
+  exit 1
+fi
+
+# Resolve device by substring (case-insensitive) from arecord -L output
+device_name="$(arecord -L 2>/dev/null | awk -v pat="$(echo "$device_filter" | tr '[:upper:]' '[:lower:]')" '
+  {
+    line=$0
+    lc=tolower(line)
+    if (index(lc, pat) > 0) { print line; exit }
+  }')"
+
+if [[ -z "$device_name" ]]; then
+  echo "[MPXCapture.sh] Device containing \"$device_filter\" NOT FOUND. Available devices:" >&2
+  arecord -L 2>/dev/null >&2 || true
+  exit 1
+fi
+
+echo "[MPXCapture.sh] Using ALSA device: ${device_name}" >&2
+
+cleanup() {
+  if [[ -n "${arecord_pid:-}" ]]; then
+    kill "$arecord_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM
+
+arecord -D "$device_name" -c2 -r "$sample_rate" -f FLOAT_LE -B 500000 -F 4096 -t raw -q - &
+arecord_pid=$!
+wait "$arecord_pid"

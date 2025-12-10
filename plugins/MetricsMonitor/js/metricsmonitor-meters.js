@@ -3,14 +3,40 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-  const sampleRate = 192000;    // Do not touch - this value is automatically updated via the config file
-  const stereoBoost = 3;    // Do not touch - this value is automatically updated via the config file
-  const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
-  const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-  const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
-  const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
-  const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
-
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+const pilotCalibration = 2;    // Do not touch - this value is automatically updated via the config file
+const mpxCalibration = 54;    // Do not touch - this value is automatically updated via the config file
+const rdsCalibration = 1.25;    // Do not touch - this value is automatically updated via the config file
+const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
+  
+  ///////////////////////////////////////////////////////////////
+  // Custom Styles for value display
+  ///////////////////////////////////////////////////////////////
+  const style = document.createElement('style');
+  style.innerHTML = `
+    /* Werte-Anzeige über dem Balken */
+    .value-display {
+      text-align: center;
+      font-size: 10px !important;   /* Gleiche Größe wie Labels */
+      line-height: 12px;
+      height: 12px;
+      color: #ddd;
+      font-family: inherit;
+      margin-bottom: 2px;
+      white-space: nowrap;
+    }
+  `;
+  document.head.appendChild(style);
 
   ///////////////////////////////////////////////////////////////
 
@@ -31,6 +57,10 @@
     mpxTotal: 0
   };
 
+  // Gating Flags controlled via WebSocket (Public API)
+  let websocketStereoActive = false; // Controlled by message.st
+  let websocketRdsActive = false;    // Controlled by message.rds
+
   // Peak-hold configuration
   const PEAK_CONFIG = {
     smoothing: 0.85,
@@ -46,10 +76,6 @@
   let mpxSpectrum = [];
   let mpxSmoothSpectrum = [];
 
-  // WICHTIG: Wir setzen den globalen Boden auf -90 (wie im alten Skript),
-  // damit RDS das schwache Signal sehen kann.
-  // Für MPX Total und Pilot simulieren wir weiter unten künstlich -70,
-  // um deren strenges Verhalten zu bewahren.
   const MPX_DB_MIN   = -90;
   const MPX_DB_MAX   = 0;
   const MPX_FMAX     = 96000;
@@ -60,9 +86,6 @@
   let rdsShortPrev   = 0;
   let rdsLongPrev    = 0;
   let mpxTotalSmooth = 0;
-
-  const PILOT_SMOOTHING     = 0.15;
-  const MPX_TOTAL_SMOOTHING = 0.85;
 
   // RDS lock state
   let rdsLocked    = false;
@@ -103,7 +126,6 @@
     const u = window.MetricsMonitor.getSignalUnit();
     if (u) {
       hfUnit = u.toLowerCase();
-      console.log("[MetricsMeters] RF unit (init) =", hfUnit);
     }
   }
 
@@ -141,25 +163,31 @@
       return Math.round(v / 10) * 10;
     }
 
+    const lastIndex = baseScale_dBuV.length - 1;
+
     if (ssu === "dbm") {
       return baseScale_dBuV.map((v, idx) => {
         const dBm = v - 108.875;
         const rounded = round10(dBm);
-        return idx === 0 ? `${rounded} dBm` : `${rounded}`;
+        // Einheit nur beim letzten Element (0) hinzufügen
+        return idx === lastIndex ? `${rounded} dBm` : `${rounded}`;
       });
     }
 
     if (ssu === "dbf") {
       return baseScale_dBuV.map((v, idx) => {
-        const dBf = v + 10.875;
+        const dBf = v + 10.875
         const rounded = round10(dBf);
-        return idx === 0 ? `${rounded} dBf` : `${rounded}`;
+        // Einheit nur beim letzten Element (0) hinzufügen
+        return idx === lastIndex ? `${rounded} dBf` : `${rounded}`;
       });
     }
 
+    // Default: dBµV
     return baseScale_dBuV.map((v, idx) => {
       const rounded = round10(v);
-      return idx === 0 ? `${rounded} dBµV` : `${rounded}`;
+      // Einheit nur beim letzten Element (0) hinzufügen
+      return idx === lastIndex ? `${rounded} dBµV` : `${rounded}`;
     });
   }
 
@@ -192,7 +220,8 @@
   const scales = {
     left: ["+5,0 dB","0,0","-5,0","-10,0","-15,0","-20,0","-25,0","-30,0","-35,0 dB"],
     right: [],
-    stereoPilot: ["15,0","13,0","11,0","9,0","7,0","5,0","3,0","1,0","0 kHz"],
+    // Changed scale to be linear: 16, 14, 12 ... 0
+    stereoPilot: ["16,0","14,0","12,0","10,0","8,0","6,0","4,0","2,0","0 kHz"],
     hf: [],
     rds: ["10,0","9,0","8,0","7,0","6,0","5,0","4,0","3,0","2,0","1,0","0 kHz"],
     mpx: ["120,0","105,0","90,0","75,0","60,0","45,0","30,0","15,0","0 kHz"]
@@ -262,6 +291,12 @@
     const meterWrapper = document.createElement("div");
     meterWrapper.classList.add("meter-wrapper");
 
+    // NEW: Add Value Display Element above Bar
+    const valueDisplay = document.createElement("div");
+    valueDisplay.classList.add("value-display");
+    valueDisplay.innerText = "0.0";
+    meterWrapper.appendChild(valueDisplay);
+
     if (id.includes("left"))  labelElement.classList.add("label-left");
     if (id.includes("right")) labelElement.classList.add("label-right");
 
@@ -284,13 +319,14 @@
     container.appendChild(levelMeter);
   }
 
-  function updateMeter(meterId, level) {
+function updateMeter(meterId, level) {
     const meter = document.getElementById(meterId);
     if (!meter) return;
 
     const isRds   = meterId.includes("rds");
     const isPilot = meterId.includes("stereo-pilot");
     const isMpx   = meterId.includes("mpx");
+    const isHf    = meterId.includes("hf");
 
     const rdsDisabled   = isRds   && !RDS_ENABLED;
     const pilotDisabled = isPilot && !PILOT_ENABLED;
@@ -358,7 +394,7 @@
             const red = 225 - Math.round(pos * 155);
             seg.style.backgroundColor = `rgb(${red},0,0)`;
           }
-        } else if (meterId.includes("hf")) {
+        } else if (isHf) {
           const hfThresholdIndex = Math.round((20 / 90) * segments.length);
           if (i < hfThresholdIndex) {
             const pos = i / hfThresholdIndex;
@@ -387,7 +423,53 @@
       updatePeakValue(channel, safeLevel);
       setPeakSegment(meter, peaks[channel].value, meterId);
     }
-  }
+    
+    const wrapper = meter.closest('.meter-wrapper');
+    if (wrapper) {
+      const valDisp = wrapper.querySelector('.value-display');
+      if (valDisp) {
+        let text = "";
+        
+        if (meterId.includes("left") || meterId.includes("right")) {
+          const channel = meterId.includes("left") ? "left" : "right";
+          const peakVal = peaks[channel].value;
+          const dB = (peakVal / 100) * 40 - 35;
+          text = dB.toFixed(1);
+
+        } else if (isHf) {
+           // ---- HIER IST DIE KORREKTUR ----
+           const calibration = 0; // Wert um 1.2 anheben
+           const dBuV = (safeLevel / 100) * 90;
+           const baseHF = dBuV + 10.875 + calibration; // Kalibrierung hier hinzufügen
+           const displayValue = hfBaseToDisplay(baseHF);
+           text = displayValue.toFixed(1);
+           // ---- ENDE DER KORREKTUR ----
+
+        } else if (isPilot) {
+           // HIER: Skala geht jetzt bis 16.0 kHz (wegen neuer Skaleneinteilung)
+           const khz = (safeLevel / 100) * 16.0;
+           text = khz.toFixed(1);
+
+        } else if (isRds) {
+           const khz = (safeLevel / 100) * 10.0;
+           text = khz.toFixed(1);
+
+        } else if (isMpx) {
+           const khz = (safeLevel / 100) * 120.0;
+           text = khz.toFixed(1);
+
+        } else {
+           text = safeLevel.toFixed(1);
+        }
+
+        if (rdsDisabled || pilotDisabled || mpxDisabled) {
+             text = "-";
+        }
+
+        valDisp.innerText = text;
+      }
+    }
+}
 
   // ---------------------------------------------------------------
   // Robust MPX data parsing (from FIX)
@@ -398,7 +480,12 @@
     }
 
     const mags = [];
-    for (let i = 0; i < data.length; i++) {
+    const dataLen = data.length;
+    
+    // NOTE: We do NOT modify the spectrum here anymore to ensure individual meters
+    // don't get distorted by the "Physical vs Visual" boost mismatch.
+    
+    for (let i = 0; i < dataLen; i++) {
       const item = data[i];
       let mag = 0;
 
@@ -447,9 +534,67 @@
     updateRdsFromSpectrum();
     updateMpxTotalFromSpectrum();
   }
+  
+  // ---------------------------------------------------------------
+  // RDS — Logic: Gated by WebSocket Status
+  // ---------------------------------------------------------------
+  function updateRdsFromSpectrum() {
+    if (!RDS_ENABLED) {
+      updateMeter("rds-meter", 0);
+      levels.rds = 0;
+      return;
+    }
+
+    if (!websocketRdsActive) {
+      rdsShortPrev = 0;
+      rdsLongPrev = 0;
+      levels.rds = 0;
+      updateMeter("rds-meter", 0);
+      return;
+    }
+
+    if (!mpxSpectrum.length) return;
+
+    const F_RDS   = 57000;
+    const RDS_BW  = 4500; 
+    
+    const P_rds   = bandPower(F_RDS, RDS_BW);
+
+    // 1. Lineare Amplitude (wie beim Pilotton)
+    let rawAmplitude = Math.sqrt(P_rds);
+
+    // 2. Verstärkungsfaktor
+    // Starten Sie hier auch mit 55.0, da Pilot und RDS ähnlich gemessen werden.
+    // Wenn die Anzeige nicht stimmt -> diesen Wert ändern.
+    const GAIN_FACTOR = 50.0; 
+
+    let devKHz = rawAmplitude * GAIN_FACTOR;
+
+    // Kalibrierung (hier verwenden wir rdsCalibration, falls nötig)
+    // Am besten auch oben in der Datei auf 0.0 setzen und alles über GAIN regeln.
+    devKHz += rdsCalibration; 
+
+    // Skala geht beim RDS-Meter bis 10.0 kHz
+    const RDS_SCALE_MAX_KHZ = 10.0;
+
+    let percent = (devKHz / RDS_SCALE_MAX_KHZ) * 100;
+
+    if (percent > 100) percent = 100;
+    if (percent < 0)   percent = 0;
+
+    // 3. Glättung (Dämpfung)
+    // Gleiche Einstellung wie beim Pilotton für einheitliche Optik
+    const SMOOTHING = 0.90;
+
+    // Wir nutzen rdsLongPrev als Speicher für die Glättung
+    rdsLongPrev = (rdsLongPrev * SMOOTHING) + (percent * (1.0 - SMOOTHING));
+
+    updateMeter("rds-meter", rdsLongPrev);
+    levels.rds = rdsLongPrev;
+  }
 
   // ---------------------------------------------------------------
-  // Pilot — Strict logic preserved (Original New State)
+  // Pilot — Logic: Gated by WebSocket Status
   // ---------------------------------------------------------------
   function updatePilotFromSpectrum() {
     if (!PILOT_ENABLED) {
@@ -458,153 +603,96 @@
       updateMeter("stereo-pilot-meter", 0);
       return;
     }
+
+    if (!websocketStereoActive && MPXmode === 'off') {
+      pilotSmooth = 0;
+      levels.stereoPilot = 0;
+      updateMeter("stereo-pilot-meter", 0);
+      return;
+    }
+
     if (!mpxSpectrum.length) return;
 
-    const F_PILOT  = 19000;
-    const PILOT_BW = 1600;
-    const NOISE_BW = 3000;
+    // Define frequencies
+    const F_PILOT    = 19000;
+    const F_NOISE_LO = 17000; // Lower noise window
+    const F_NOISE_HI = 21000; // Upper noise window
+    const BW_SIGNAL  = 800;   // Bandwidth for signal measurement (narrower)
+    const BW_NOISE   = 800;   // Bandwidth for noise measurement
 
-    const P_pilot = bandPower(F_PILOT, PILOT_BW);
-    const P_noise = bandPower(25000, NOISE_BW);
+    // Measure power
+    const P_pilot    = bandPower(F_PILOT, BW_SIGNAL);
+    const P_noise_lo = bandPower(F_NOISE_LO, BW_NOISE);
+    const P_noise_hi = bandPower(F_NOISE_HI, BW_NOISE);
 
-    const pilotDb = 10 * Math.log10(P_pilot + 1e-15);
-    const noiseDb = 10 * Math.log10(P_noise + 1e-15);
+    // Calculate average noise floor
+    const P_noise_avg = (P_noise_lo + P_noise_hi) / 2;
 
-    // 1) RF gating (Strict)
-    const HF_THRESHOLD_PERCENT = 12;
-    const hfPercent = Number(levels.hf) || 0;
+    // Calculate SNR (Signal-to-Noise Ratio)
+    // Avoid division by zero if P_noise_avg is extremely small
+    const snrRatio = P_pilot / (P_noise_avg + 1e-15);
 
-    if (hfPercent < HF_THRESHOLD_PERCENT) {
-      pilotSmooth *= 0.92;
-      levels.stereoPilot = pilotSmooth;
-      updateMeter("stereo-pilot-meter", pilotSmooth);
-      return;
+    // Linear amplitude of the pilot signal
+    let rawAmplitude = Math.sqrt(P_pilot);
+    const GAIN_FACTOR = 20.0; 
+    let devKHz = rawAmplitude * GAIN_FACTOR;
+    
+    // --- SMART NOISE GATE ---
+    // Check two conditions:
+    // 1. Is the signal at 19kHz at least 3x stronger than the surrounding noise? (SNR > 3)
+    // 2. Is there a minimum level present at all? (> 0.2 kHz)
+    
+    if (snrRatio > 3.0 && devKHz > 0.2) {
+       devKHz += pilotCalibration;
+    } else {
+       devKHz = 0;
     }
 
-    // 2) SNR check (Strict)
-    const MIN_SNR_DB = 1.2;
-    if (pilotDb < noiseDb + MIN_SNR_DB) {
-      pilotSmooth *= 0.92;
-      levels.stereoPilot = pilotSmooth;
-      updateMeter("stereo-pilot-meter", pilotSmooth);
-      return;
-    }
-
-    // 3) Ratio check (Strict)
-    const ratio = Math.sqrt(P_pilot) / Math.sqrt(P_noise);
-    if (ratio < 1.1) {
-      pilotSmooth *= 0.92;
-      levels.stereoPilot = pilotSmooth;
-      updateMeter("stereo-pilot-meter", pilotSmooth);
-      return;
-    }
-
-    const PILOT_DEV_MAX_KHZ   = 8.0;
-    const PILOT_SCALE_MAX_KHZ = 15.0;
-
-    let norm = (pilotDb + 85) / 85;
-    if (norm < 0) norm = 0;
-    if (norm > 1) norm = 1;
-
-    const devKHz = norm * PILOT_DEV_MAX_KHZ;
+    // HERE: Scale now goes up to 16.0 kHz (linear)
+    const PILOT_SCALE_MAX_KHZ = 16.0;
     let percent = (devKHz / PILOT_SCALE_MAX_KHZ) * 100;
+
     if (percent > 100) percent = 100;
     if (percent < 0)   percent = 0;
 
-    pilotSmooth = pilotSmooth * 0.88 + percent * 0.12;
+    // --- MASSIVE DAMPING (Inertia) ---
+    pilotSmooth = pilotSmooth * 0.96 + percent * 0.04;
+
     levels.stereoPilot = pilotSmooth;
     updateMeter("stereo-pilot-meter", pilotSmooth);
   }
-
-  // ---------------------------------------------------------------
-  // RDS — RELAXED Logic to make it work like old script
-  // ---------------------------------------------------------------
-  function updateRdsFromSpectrum() {
-    if (!RDS_ENABLED) {
-      updateMeter("rds-meter", 0);
-      levels.rds = 0;
-      return;
-    }
-    if (!mpxSpectrum.length) return;
-
-    const F_PILOT = 19000;
-    const F_RDS   = 57000;
-    const PILOT_BW = 1800;
-    const RDS_BW   = 1200;
-
-    const P_pilot = bandPower(F_PILOT, PILOT_BW);
-    const P_rds   = bandPower(F_RDS,   RDS_BW);
-    const noise   = bandPower(52000,   3500);
-
-    const rdsDb   = 10 * Math.log10(P_rds  + 1e-15);
-    const noiseDb = 10 * Math.log10(noise  + 1e-15);
-    const pilotDb = 10 * Math.log10(P_pilot + 1e-15);
-
-    // FIX: Hier die Schwelle auf -70 gesenkt (im strengen Skript war sie -35)
-    const PILOT_ON = (pilotDb > -70);
-
-    // FIX: Noise Check relaxter handhaben
-    const RDS_DETECTED = (rdsDb > noiseDb + 0.05);
-
-    // Ratio check
-    const ratio    = Math.sqrt(P_rds) / Math.sqrt(P_pilot);
-    const ratioMin = 0.005; // etwas relaxter als 0.008
-    const RATIO_OK = (ratio > ratioMin);
-
-    let newLock = false;
-    if (PILOT_ON && RDS_DETECTED && RATIO_OK) newLock = true;
-
-    if (newLock) {
-      rdsLocked    = true;
-      rdsLockTimer = 18;
-    } else {
-      if (rdsLockTimer > 0) {
-        rdsLockTimer--;
-        newLock = true;
-      } else {
-        rdsLocked = false;
-      }
-    }
-
-    if (!newLock) {
-      rdsShortPrev *= 0.92;
-      rdsLongPrev  *= 0.96;
-      updateMeter("rds-meter", rdsLongPrev);
-      levels.rds = rdsLongPrev;
-      return;
-    }
-
-    const PILOT_DEV = 9.0;
-    let dev = ratio * PILOT_DEV;
-
-    if (dev < 0.3) dev = 0.3;
-    if (dev > 6.0) dev = 6.0;
-
-    let percent = (dev / 10.0) * 100;
-    if (percent > 100) percent = 100;
-    if (percent < 0)   percent = 0;
-
-    const SHORT = 0.65;
-    const LONG  = 0.93;
-
-    const s1 = percent * (1 - SHORT) + rdsShortPrev * SHORT;
-    rdsShortPrev = s1;
-    const s2 = rdsLongPrev * LONG + s1 * (1 - LONG);
-    rdsLongPrev = s2;
-
-    updateMeter("rds-meter", s2);
-    levels.rds = s2;
+  
+  function hideEqHint() {
+    const hint = document.getElementById("eqHintText");
+    if (!hint) return;
+    hint.style.opacity = "0";
+    setTimeout(() => {
+      if (hint) hint.style.display = "none";
+    }, 300);
   }
-
-  // ---------------------------------------------------------------
-  // MPX Total — Strict logic preserved
+  
+    // ---------------------------------------------------------------
+  // MPX Total — Logic
   // ---------------------------------------------------------------
   let mpxPercentPrev = 0;
+  let mpxMinHold = 120;
+  let mpxMinHoldTimer = 0;
+  const MPX_MIN_HOLD_MS = 2000;
 
   function updateMpxTotalFromSpectrum() {
     if (!MPX_ENABLED) {
       mpxPercentPrev  = 0;
       mpxTotalSmooth  = 0;
+      mpxMinHold      = 120;
+      levels.mpxTotal = 0;
+      updateMeter("mpx-meter", 0);
+      return;
+    }
+
+    if (!websocketRdsActive) {
+      mpxPercentPrev  = 0;
+      mpxTotalSmooth  = 0;
+      mpxMinHold      = 120;
       levels.mpxTotal = 0;
       updateMeter("mpx-meter", 0);
       return;
@@ -612,92 +700,113 @@
 
     if (!mpxSpectrum.length) return;
 
-    // 0) Strict "No Signal" gating
-    const HF_THRESHOLD_PERCENT    = 25;
-    const PILOT_THRESHOLD_PERCENT = 5;
-
-    const hfPercent  = Number(levels.hf) || 0;
-    const pilotLevel = Number(levels.stereoPilot) || 0;
-
-    if (hfPercent < HF_THRESHOLD_PERCENT ||
-        pilotLevel < PILOT_THRESHOLD_PERCENT) {
-      mpxPercentPrev  = 0;
-      mpxTotalSmooth  = 0;
-      levels.mpxTotal = 0;
-      updateMeter("mpx-meter", 0);
-      return;
-    }
-
     const N       = mpxSpectrum.length;
     const maxFreq = MPX_FMAX;
     const fLimit  = 60000;
 
-    let sumDb = 0;
+    // RMS-Method: Calculate total power of all frequency components
+    let sumPower = 0;
     let count = 0;
-
-    // Strict filtering simulation: -70 dB threshold applied here
-    const STRICT_THRESHOLD = -70;
 
     for (let i = 0; i < N; i++) {
       const freq = (i / (N - 1)) * maxFreq;
       if (freq > fLimit) break;
 
-      const db = mpxSpectrum[i];
-      // Ignore weak signals here to maintain "Strict" MPX behavior
-      if (!isFinite(db) || db < STRICT_THRESHOLD) continue;
+      let db = mpxSpectrum[i];
+      if (!isFinite(db) || db < -90) continue;
 
-      sumDb += db;
+      // dB to linear amplitude
+      const amplitude = Math.pow(10, db / 20);
+      // Power = Amplitude²
+      sumPower += amplitude * amplitude;
       count++;
     }
 
-    if (!count) {
-      mpxPercentPrev  = 0;
-      mpxTotalSmooth  = 0;
-      levels.mpxTotal = 0;
-      updateMeter("mpx-meter", 0);
+    if (count === 0 || sumPower === 0) {
+      // Don't reset everything immediately to avoid flickering, just decay
+      mpxTotalSmooth  = mpxTotalSmooth * 0.9; 
+      levels.mpxTotal = mpxTotalSmooth;
+      updateMeter("mpx-meter", mpxTotalSmooth);
       return;
     }
 
-    const avgDb = sumDb / count;
-    let devKHz;
+    // RMS = Square root of mean power
+    const rmsAmplitude = Math.sqrt(sumPower / count);
+    
+    // RMS-Amplitude to dB
+    const rmsDb = 20 * Math.log10(rmsAmplitude + 1e-15);
 
-    if (avgDb < -60) {
-      devKHz = (avgDb + 80) * (25 / 20);
-    } else if (avgDb < -50) {
-      devKHz = 25 + ((avgDb + 60) * (15 / 10));
-    } else if (avgDb < -40) {
-      devKHz = 40 + ((avgDb + 50) * (20 / 10));
-    } else if (avgDb < -30) {
-      devKHz = 60 + ((avgDb + 40) * (20 / 10));
-    } else {
-      devKHz = 80 + ((avgDb + 30) * (20 / 10));
-    }
+    // Conversion to kHz deviation
+    // Calibrated: -55 dB RMS = approx 15 kHz, -45 dB RMS = approx 35 kHz
+    // Formula: devKHz = 75 * 10^((rmsDb + offset) / 20)
+    
+    const DB_OFFSET = 10.0;  // Adjustment factor
+    const SCALE_FACTOR = 1.8;  // Scaling
+    
+    let devKHz = 75.0 * Math.pow(10, (rmsDb + DB_OFFSET) / 20) * SCALE_FACTOR;
+
+    // Apply calibration
+    devKHz += mpxCalibration;
 
     if (devKHz < 0)   devKHz = 0;
     if (devKHz > 120) devKHz = 120;
-    devKHz *= 1.30;
 
-    let percent = (devKHz / 120) * 100;
+    // --- MINIMUM-HOLD LOGIC ---
+    const now = Date.now();
+    
+    if (devKHz < mpxMinHold) {
+      mpxMinHold = devKHz;
+      mpxMinHoldTimer = now;
+    }
+    
+    if (now - mpxMinHoldTimer > MPX_MIN_HOLD_MS) {
+      const riseSpeed = 0.02;
+      if (devKHz > mpxMinHold) {
+        mpxMinHold = mpxMinHold + (devKHz - mpxMinHold) * riseSpeed;
+      }
+    }
+
+    // Using mpxMinHold creates a "floor" that rises slowly, 
+    // ensuring readability of fluctuating values
+    let displayKHz = mpxMinHold;
+
+    // Use actual current value if it's higher than the hold floor
+    if (devKHz > displayKHz) {
+        displayKHz = devKHz;
+    }
+
+    let percent = (displayKHz / 120) * 100;
+
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
 
-    const shortSmoothFactor = 0.75;
+    // Smoothing
+    const shortSmoothFactor = 0.85;
     percent = percent * (1 - shortSmoothFactor) +
               mpxPercentPrev * shortSmoothFactor;
     mpxPercentPrev = percent;
 
-    const longSmoothFactor = 0.93;
+    const longSmoothFactor = 0.95;
     mpxTotalSmooth = mpxTotalSmooth * longSmoothFactor +
                      percent * (1 - longSmoothFactor);
 
     levels.mpxTotal = mpxTotalSmooth;
     updateMeter("mpx-meter", mpxTotalSmooth);
   }
-
+  
   // ---------------------------------------------------------------
   // Stereo audio meters
   // ---------------------------------------------------------------
-  function setupAudioMeters() {
+  function hideEqHint() {
+    const hint = document.getElementById("eqHintText");
+    if (!hint) return;
+    hint.style.opacity = "0";
+    setTimeout(() => {
+      if (hint) hint.style.display = "none";
+    }, 300);
+  }
+
+    function setupAudioMeters() {
     if (
       typeof Stream === "undefined" ||
       !Stream.Fallback ||
@@ -734,6 +843,7 @@
         if (!stereoAnimationId) {
           startStereoAnimation();
         }
+        hideEqHint(); // <--- ADDED HERE
         return;
       }
 
@@ -755,6 +865,7 @@
       if (!stereoAnimationId) {
         startStereoAnimation();
       }
+      hideEqHint();
     } catch (e) {
       console.error("[MetricsMeters] Error while setting up stereo audio analysers", e);
     }
@@ -860,18 +971,28 @@
 
     const stereoGroup = document.createElement("div");
     stereoGroup.classList.add("stereo-group");
-
-    createLevelMeter("left-meter",  "LEFT",  stereoGroup, scales.left);
+	
+	createLevelMeter("left-meter",  "LEFT",  stereoGroup, scales.left);
     createLevelMeter("right-meter", "RIGHT", stereoGroup, scales.right);
 
     container.appendChild(stereoGroup);
+
+    // --- HINT OVERLAY ---
+    const eqHintWrapper = document.createElement("div");
+    eqHintWrapper.id = "eqHintWrapper";
+    const eqHintText = document.createElement("div");
+    eqHintText.id = "eqHintText";
+    eqHintText.innerText = "Click play to show";
+    eqHintWrapper.style.left = "-50%";
+    eqHintWrapper.appendChild(eqHintText);
+    stereoGroup.appendChild(eqHintWrapper);
 
     const hfScale = buildHFScale(hfUnit);
     createLevelMeter("hf-meter", "RF", container, hfScale);
 
     const hfLevelMeter = container.querySelector("#hf-meter")?.closest(".level-meter");
     if (hfLevelMeter) {
-      hfLevelMeter.style.transform = "translateX(-5px)";
+      hfLevelMeter.style.transform = "translateX(0px)";
     }
 
     createLevelMeter("stereo-pilot-meter", "PILOT", container, scales.stereoPilot);
@@ -928,6 +1049,14 @@
     updateMeter,
     initMeters,
 
+    // Setters called by metricsmonitor-header.js
+    setStereoStatus(isActive) {
+      websocketStereoActive = !!isActive;
+    },
+    setRdsStatus(isActive) {
+      websocketRdsActive = !!isActive;
+    },
+
     getStereoBoost() {
       return stereoBoost;
     },
@@ -939,18 +1068,18 @@
       }
     },
 
-    setHF(baseValue) {
-      const v = Number(baseValue);
-      if (!isFinite(v)) return;
+setHF(baseValue) {
+  const v = Number(baseValue);
+  if (!isFinite(v)) return;
 
-      levels.hfBase = v;
-      const displayHF = hfBaseToDisplay(v);
-      levels.hfValue = displayHF;
+  levels.hfBase = v;
+  const displayHF = hfBaseToDisplay(v);
+  levels.hfValue = displayHF;
 
-      const percent = hfPercentFromBase(v);
-      levels.hf = percent;
-      updateMeter("hf-meter", percent);
-    },
+  const percent = hfPercentFromBase(v);
+  levels.hf = percent;
+  updateMeter("hf-meter", percent);
+},
 
     setHFUnit(unit) {
       console.log("[MetricsMeters] setHFUnit() :: new unit =", unit);

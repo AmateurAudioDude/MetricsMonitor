@@ -7,9 +7,17 @@ const sampleRate = 48000;    // Do not touch - this value is automatically updat
 const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+const pilotCalibration = 2;    // Do not touch - this value is automatically updated via the config file
+const mpxCalibration = 54;    // Do not touch - this value is automatically updated via the config file
+const rdsCalibration = 1.25;    // Do not touch - this value is automatically updated via the config file
+const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
 
 ///////////////////////////////////////////////////////////////
 
@@ -110,39 +118,41 @@ function hfPercentFromBase(baseHF) {
 }
 
 // Build HF scale depending on current unit
-function buildHFScale(unit) {
-  const baseScale_dBuV = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
-  const ssu = (unit || hfUnit || "").toLowerCase();
+  function buildHFScale(unit) {
+    const baseScale_dBuV = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
+    const ssu = (unit || hfUnit || "").toLowerCase();
 
-  // Helper: round to nearest 10
-  function round10(v) {
-    return Math.round(v / 10) * 10;
-  }
+    function round10(v) {
+      return Math.round(v / 10) * 10;
+    }
 
-  // dBm = dBµV - 108.875
-  if (ssu === "dbm") {
+    const lastIndex = baseScale_dBuV.length - 1;
+
+    if (ssu === "dbm") {
+      return baseScale_dBuV.map((v, idx) => {
+        const dBm = v - 108.875;
+        const rounded = round10(dBm);
+        // NEU: Einheit nur beim letzten Element (0) hinzufügen
+        return idx === lastIndex ? `${rounded} dBm` : `${rounded}`;
+      });
+    }
+
+    if (ssu === "dbf") {
+      return baseScale_dBuV.map((v, idx) => {
+        const dBf = v + 10.875;
+        const rounded = round10(dBf);
+        // NEU: Einheit nur beim letzten Element (0) hinzufügen
+        return idx === lastIndex ? `${rounded} dBf` : `${rounded}`;
+      });
+    }
+
+    // Default: dBµV
     return baseScale_dBuV.map((v, idx) => {
-      const dBm = v - 108.875;
-      const rounded = round10(dBm);
-      return idx === 0 ? `${rounded} dBm` : `${rounded}`;
+      const rounded = round10(v);
+      // NEU: Einheit nur beim letzten Element (0) hinzufügen
+      return idx === lastIndex ? `${rounded} dBµV` : `${rounded}`;
     });
   }
-
-  // dBf = dBµV + 10.875
-  if (ssu === "dbf") {
-    return baseScale_dBuV.map((v, idx) => {
-      const dBf = v + 10.875;
-      const rounded = round10(dBf);
-      return idx === 0 ? `${rounded} dBf` : `${rounded}`;
-    });
-  }
-
-  // Default: dBµV
-  return baseScale_dBuV.map((v, idx) => {
-    const rounded = round10(v);
-    return idx === 0 ? `${rounded} dBµV` : `${rounded}`;
-  });
-}
 
 
 // -------------------------------------------------------
@@ -253,7 +263,7 @@ function createLevelMeter(id, label, container, scaleValues) {
 
   if (scaleValues && scaleValues.length > 0) {
     const scale = document.createElement("div");
-    scale.classList.add("meter-scale");
+    scale.classList.add("meter-scale-equalizer");
     scaleValues.forEach((v) => {
       const tick = document.createElement("div");
       tick.innerText = v;
@@ -397,6 +407,7 @@ function setupAudioEQ() {
   // Wait until Stream object is available
   if (
     typeof Stream === "undefined" ||
+    !Stream || // Hinzugefügt: Prüft explizit auf null/false
     !Stream.Fallback ||
     !Stream.Fallback.Player ||
     !Stream.Fallback.Player.Amplification
@@ -405,7 +416,7 @@ function setupAudioEQ() {
     setTimeout(setupAudioEQ, 2000);
     return;
   }
-
+  
   const player = Stream.Fallback.Player;
   const sourceNode = player.Amplification;
 
@@ -569,15 +580,17 @@ function initEqualizer(containerOrId = "level-meter-container") {
     }
   }
 
-  console.log("[MetricsEqualizer] HF unit (init):", hfUnit);
-
   // clear existing content
   container.innerHTML = "";
 
-  // Stereo group
+  // Eigener Container für die Haupt-Pegel (Stereo + RF)
+  const signalMetersGroup = document.createElement("div");
+  signalMetersGroup.classList.add("signal-meters-group");
+
+  // Stereo-Gruppe erstellen
   const stereoGroup = document.createElement("div");
   stereoGroup.classList.add("stereo-group");
-
+  
   const stereoScale = [
     "+5,0 dB",
     "0,0",
@@ -589,21 +602,20 @@ function initEqualizer(containerOrId = "level-meter-container") {
     "-30,0",
     "-35,0 dB"
   ];
-
+  
+  // Stereo-Pegel in die Stereo-Gruppe einfügen
   createLevelMeter("left-meter", "LEFT", stereoGroup, stereoScale);
   createLevelMeter("right-meter", "RIGHT", stereoGroup, []);
+  
+  // Stereo-Gruppe dem neuen Haupt-Container hinzufügen
+  signalMetersGroup.appendChild(stereoGroup);
 
-  container.appendChild(stereoGroup);
-
-  // HF meter – scale now dynamic depending on hfUnit
+  // HF-Pegel direkt in den neuen Haupt-Container einfügen
   const hfScale = buildHFScale(hfUnit);
-  createLevelMeter("hf-meter", "RF", container, hfScale);
-
-  // Slightly shift HF meter to the left (like original)
-  const hfLevelMeter = container.querySelector("#hf-meter")?.closest(".level-meter");
-  if (hfLevelMeter) {
-    hfLevelMeter.style.transform = "translateX(-5px)";
-  }
+  createLevelMeter("hf-meter", "RF", signalMetersGroup, hfScale);
+  
+  // Den neuen Haupt-Container zum finalen Container hinzufügen
+  container.appendChild(signalMetersGroup);
 
   // EQ group
   const eqGroup = document.createElement("div");
@@ -614,13 +626,16 @@ function initEqualizer(containerOrId = "level-meter-container") {
   eqTitle.innerText = "5-BAND EQUALIZER";
   eqGroup.appendChild(eqTitle);
 
+    // --- HINT OVERLAY ---
   const eqHintWrapper = document.createElement("div");
   eqHintWrapper.id = "eqHintWrapper";
   const eqHintText = document.createElement("div");
   eqHintText.id = "eqHintText";
   eqHintText.innerText = "Click play to show";
+  eqHintWrapper.style.top = "-5%";
+  eqHintWrapper.style.left = "-10%";
   eqHintWrapper.appendChild(eqHintText);
-  eqGroup.appendChild(eqHintWrapper);
+  stereoGroup.appendChild(eqHintWrapper);
 
   const eqBars = document.createElement("div");
   eqBars.classList.add("eq-bars");
@@ -704,7 +719,7 @@ window.MetricsEqualizer = {
       return;
     }
 
-    const scaleEl = levelMeter.querySelector(".meter-scale");
+    const scaleEl = levelMeter.querySelector(".meter-scale-equalizer");
     if (!scaleEl) {
       console.warn("[Equalizer] setHFUnit(): scale container not found!");
       return;

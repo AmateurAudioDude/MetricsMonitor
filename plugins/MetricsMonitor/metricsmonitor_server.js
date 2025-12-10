@@ -1,8 +1,10 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.1a) //
+//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER (V1.2)  //
 //                                                           //
-//  by Highpoint               last update: 03.12.2025       //
+//  by Highpoint               last update: 12.12.2025       //
+//                                                           //
+//  Thanks for support by Jeroen Platenkamp, Bkram, Wötkylä  //
 //                                                           //
 //  https://github.com/Highpoint2000/metricsmonitor          //
 //                                                           //
@@ -169,6 +171,7 @@ const configFilePath = path.join(
 //   0 = Equalizer
 //   1 = Level meters
 //   2 = Analyzer
+//   3 = Signalmeter
 
 // Default plugin configuration
 const defaultConfig = {
@@ -177,15 +180,32 @@ const defaultConfig = {
   fftSize: 512,
   SpectrumAverageLevel: 15,
   minSendIntervalMs: 30,
+  pilotCalibration: 2.0,
+  mpxCalibration: 54.0,
+  rdsCalibration: 1.25,
+  "Curve-Y-Offset": -40,
+  "Curve-Y-Dynamics": 1.9,
   MPXmode: "off",           // "off" | "on" | "auto"
+  MPXStereoDecoder: "off",  // "off" | "on"
+  MPXInputCard: "",         // "" | "Name of Soundcard"
   stereoBoost: 1.0,
   eqBoost: 1.0,
-  MODULE_SEQUENCE: "1, 2, 0",
+  MODULE_SEQUENCE: "1, 2, 0, 3",
+  LockVolumeSlider: true,
 };
 
 // Normalize / complete configuration object and enforce key order
 function normalizePluginConfig(json) {
-  const result = {
+  // MIGRATION: If old "ExtStereoDecoder" exists but "MPXStereoDecoder" does not, migrate it.
+  if (
+    typeof json.ExtStereoDecoder !== "undefined" &&
+    typeof json.MPXStereoDecoder === "undefined"
+  ) {
+    json.MPXStereoDecoder = json.ExtStereoDecoder;
+    delete json.ExtStereoDecoder; // remove old key
+  }
+  
+    const result = {
     sampleRate:
       typeof json.sampleRate !== "undefined"
         ? json.sampleRate
@@ -202,10 +222,38 @@ function normalizePluginConfig(json) {
       typeof json.minSendIntervalMs !== "undefined"
         ? json.minSendIntervalMs
         : defaultConfig.minSendIntervalMs,
+    pilotCalibration:
+      typeof json.pilotCalibration !== "undefined"
+        ? json.pilotCalibration
+        : defaultConfig.pilotCalibration,
+    mpxCalibration:
+      typeof json.mpxCalibration !== "undefined"
+        ? json.mpxCalibration
+        : defaultConfig.mpxCalibration,
+    rdsCalibration:
+      typeof json.rdsCalibration !== "undefined"
+        ? json.rdsCalibration
+        : defaultConfig.rdsCalibration,
+    "Curve-Y-Offset":
+      typeof json["Curve-Y-Offset"] !== "undefined"
+        ? json["Curve-Y-Offset"]
+        : defaultConfig["Curve-Y-Offset"],
+    "Curve-Y-Dynamics":
+      typeof json["Curve-Y-Dynamics"] !== "undefined"
+        ? json["Curve-Y-Dynamics"]
+        : defaultConfig["Curve-Y-Dynamics"],
     MPXmode:
       typeof json.MPXmode !== "undefined"
         ? json.MPXmode
         : defaultConfig.MPXmode,
+    MPXStereoDecoder:
+      typeof json.MPXStereoDecoder !== "undefined"
+        ? json.MPXStereoDecoder
+        : defaultConfig.MPXStereoDecoder,
+    MPXInputCard:
+      typeof json.MPXInputCard !== "undefined"
+        ? json.MPXInputCard
+        : defaultConfig.MPXInputCard,
     stereoBoost:
       typeof json.stereoBoost !== "undefined"
         ? json.stereoBoost
@@ -218,6 +266,10 @@ function normalizePluginConfig(json) {
       typeof json.MODULE_SEQUENCE !== "undefined"
         ? json.MODULE_SEQUENCE
         : defaultConfig.MODULE_SEQUENCE,
+    LockVolumeSlider:
+      typeof json.LockVolumeSlider !== "undefined"
+        ? json.LockVolumeSlider
+        : defaultConfig.LockVolumeSlider,
   };
 
   // Keep any additional fields from older configs
@@ -374,6 +426,95 @@ function getMpxMode(cfg) {
   return defaultConfig.MPXmode;
 }
 
+function getMPXStereoDecoder(cfg) {
+  if (!cfg || typeof cfg.MPXStereoDecoder === "undefined") {
+    // Fallback to old key if present for safety, though normalize should have caught it
+    if (typeof cfg.ExtStereoDecoder !== "undefined") {
+        return String(cfg.ExtStereoDecoder).toLowerCase();
+    }
+    return defaultConfig.MPXStereoDecoder;
+  }
+  const val = String(cfg.MPXStereoDecoder).toLowerCase();
+  if (val === "on" || val === "off") {
+    return val;
+  }
+  return defaultConfig.MPXStereoDecoder;
+}
+
+function getLockVolumeSlider(cfg) {
+  if (!cfg || typeof cfg.LockVolumeSlider === "undefined") {
+    return defaultConfig.LockVolumeSlider;
+  }
+  // ensure it is a boolean
+  return cfg.LockVolumeSlider === true;
+}
+
+function getMPXInputCard(cfg) {
+  if (!cfg || typeof cfg.MPXInputCard === "undefined") {
+    return defaultConfig.MPXInputCard;
+  }
+  // Return trimmed string, default is ""
+  // Also remove any surrounding quotes if user added them manually in JSON
+  let s = String(cfg.MPXInputCard).trim();
+  s = s.replace(/^["'](.*)["']$/, '$1');
+  return s;
+}
+
+function getPilotCalibration(cfg) {
+  if (!cfg) return defaultConfig.pilotCalibration;
+  const val =
+    typeof cfg.pilotCalibration === "string"
+      ? Number(cfg.pilotCalibration)
+      : cfg.pilotCalibration;
+  return typeof val === "number" && !Number.isNaN(val)
+    ? val
+    : defaultConfig.pilotCalibration;
+}
+
+function getMpxCalibration(cfg) {
+  if (!cfg) return defaultConfig.mpxCalibration;
+  const val =
+    typeof cfg.mpxCalibration === "string"
+      ? Number(cfg.mpxCalibration)
+      : cfg.mpxCalibration;
+  return typeof val === "number" && !Number.isNaN(val)
+    ? val
+    : defaultConfig.mpxCalibration;
+}
+
+function getRdsCalibration(cfg) {
+  if (!cfg) return defaultConfig.rdsCalibration;
+  const val =
+    typeof cfg.rdsCalibration === "string"
+      ? Number(cfg.rdsCalibration)
+      : cfg.rdsCalibration;
+  return typeof val === "number" && !Number.isNaN(val)
+    ? val
+    : defaultConfig.rdsCalibration;
+}
+
+function getCurveYOffset(cfg) {
+  if (!cfg) return defaultConfig["Curve-Y-Offset"];
+  const val =
+    typeof cfg["Curve-Y-Offset"] === "string"
+      ? Number(cfg["Curve-Y-Offset"])
+      : cfg["Curve-Y-Offset"];
+  return typeof val === "number" && !Number.isNaN(val)
+    ? val
+    : defaultConfig["Curve-Y-Offset"];
+}
+
+function getCurveYDynamics(cfg) {
+  if (!cfg) return defaultConfig["Curve-Y-Dynamics"];
+  const val =
+    typeof cfg["Curve-Y-Dynamics"] === "string"
+      ? Number(cfg["Curve-Y-Dynamics"])
+      : cfg["Curve-Y-Dynamics"];
+  return typeof val === "number" && !Number.isNaN(val)
+    ? val
+    : defaultConfig["Curve-Y-Dynamics"];
+}
+
 // Load plugin configuration
 const configPlugin = loadConfig(configFilePath);
 
@@ -387,6 +528,14 @@ const FFT_SIZE = getFftSize(configPlugin);
 const MIN_SEND_INTERVAL_MS = getMinSendIntervalMs(configPlugin);
 const SPECTRUM_AVERAGE_LEVELS = getSpectrumAverageLevel(configPlugin);
 const MPX_MODE = getMpxMode(configPlugin); // "off" | "on" | "auto"
+const MPX_STEREO_DECODER = getMPXStereoDecoder(configPlugin); // "off" | "on"
+const MPX_INPUT_CARD = getMPXInputCard(configPlugin); // "" | "Device Name"
+const LOCK_VOLUME_SLIDER = getLockVolumeSlider(configPlugin); // true | false
+const PILOT_CALIBRATION = getPilotCalibration(configPlugin);
+const MPX_CALIBRATION = getMpxCalibration(configPlugin);
+const RDS_CALIBRATION = getRdsCalibration(configPlugin);
+const CURVE_Y_OFFSET = getCurveYOffset(configPlugin);
+const CURVE_Y_DYNAMICS = getCurveYDynamics(configPlugin);
 
 // Only enable MPX if sequence contains 1 (Level meters) or 2 (Analyzer)
 const ENABLE_MPX = hasAnalyzerOrMeters(configPlugin);
@@ -410,7 +559,7 @@ function normalizeSequence(seq) {
     return JSON.stringify(items);
   }
 
-  return "[0, 1, 2]";
+  return "[0, 1, 2, 3]";
 }
 
 const MODULE_SEQUENCE_JS = normalizeSequence(MODULE_SEQUENCE);
@@ -433,6 +582,10 @@ const MetricsMonitorClientHeaderFile = path.join(
   __dirname,
   "js/metricsmonitor-header.js"
 );
+const MetricsMonitorClientSignalMeterFile = path.join(
+  __dirname,
+  "js/metricsmonitor-signalmeter.js"
+);
 
 //-------------------------------------------------------------
 //  Write MODULE_SEQUENCE and header constants into client JS
@@ -450,7 +603,15 @@ function updateSettings() {
       `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
       `const SpectrumAverageLevel = ${SPECTRUM_AVERAGE_LEVELS};    // Do not touch - this value is automatically updated via the config file\n` +
       `const minSendIntervalMs = ${MIN_SEND_INTERVAL_MS};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MPXmode = "${MPX_MODE}";    // Do not touch - this value is automatically updated via the config file\n`
+      `const pilotCalibration = ${PILOT_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const mpxCalibration = ${MPX_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const rdsCalibration = ${RDS_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const CurveYOffset = ${CURVE_Y_OFFSET};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const CurveYDynamics = ${CURVE_Y_DYNAMICS};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const MPXmode = "${MPX_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
+      `const MPXStereoDecoder = "${MPX_STEREO_DECODER}";    // Do not touch - this value is automatically updated via the config file\n` +
+      `const MPXInputCard = "${MPX_INPUT_CARD}";    // Do not touch - this value is automatically updated via the config file\n` +
+      `const LockVolumeSlider = ${LOCK_VOLUME_SLIDER};    // Do not touch - this value is automatically updated via the config file\n`
     );
   }
 
@@ -468,7 +629,16 @@ function updateSettings() {
       .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXmode\s*=.*;[^\n]*\n?/gm, "");
+      .replace(/^\s*const\s+pilotCalibration\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+mpxCalibration\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+rdsCalibration\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+CurveYOffset\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+CurveYDynamics\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+MPXmode\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+ExtStereoDecoder\s*=.*;[^\n]*\n?/gm, "") // Remove old var if present
+      .replace(/^\s*const\s+MPXStereoDecoder\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+MPXInputCard\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+LockVolumeSlider\s*=.*;[^\n]*\n?/gm, "");
 
     // 2) remove pure "Do not touch..." comment lines,
     //    but keep inline comments behind other statements
@@ -585,6 +755,16 @@ function updateSettings() {
     "metricsmonitor-meters.js",
     insertAfterIIFE
   );
+
+  //-----------------------------------------------------------
+  // 6) Insert header constants into signalmeter script
+  //-----------------------------------------------------------  
+  updateClientFile(
+  MetricsMonitorClientSignalMeterFile,
+  "metricsmonitor-signalmeter.js",
+  insertAfterIIFE
+);
+  
 }
 
 //-------------------------------------------------------------
@@ -691,8 +871,9 @@ if (!ENABLE_MPX) {
   //-----------------------------------------------------------
   //  MPX server settings
   //-----------------------------------------------------------
-  let SAMPLE_RATE = 192000; // default for MPXCapture.exe (Windows/macOS)
-
+  // FIX: Use CONFIG_SAMPLE_RATE instead of hardcoded 192000
+  let SAMPLE_RATE = CONFIG_SAMPLE_RATE; 
+  
   // FFT configuration (configured via metricsmonitor.json)
   const HOP_SIZE = FFT_SIZE / 2;
   const MAX_LATENCY_BLOCKS = 2; // we keep at most this many FFT blocks
@@ -715,6 +896,10 @@ if (!ENABLE_MPX) {
   logInfo(`[MPX] SpectrumAverageLevel from metricsmonitor.json → ${SPECTRUM_AVERAGE_LEVELS}`);
   logInfo(`[MPX] minSendIntervalMs from metricsmonitor.json → ${MIN_SEND_INTERVAL_MS} ms`);
   logInfo(`[MPX] MPXmode from metricsmonitor.json → ${MPX_MODE}`);
+  logInfo(`[MPX] MPXStereoDecoder from metricsmonitor.json → ${MPX_STEREO_DECODER}`);
+  if (MPX_INPUT_CARD !== "") {
+    logInfo(`[MPX] MPXInputCard from metricsmonitor.json → "${MPX_INPUT_CARD}"`);
+  }
 
   // MPX capture executable resolution (for Windows/macOS only)
   const osPlatform = process.platform;
@@ -754,9 +939,9 @@ if (!ENABLE_MPX) {
 
   if (!runtimeFolder || !binaryName) {
     logWarn("[MPX] No runtimeFolder/binaryName detected – MPXCapture disabled.");
-  } else if (osPlatform === "win32" && CONFIG_SAMPLE_RATE === 48000) {
-    // On Windows with 48 kHz we use 3LAS, not MPXCapture
-    logWarn("[MPX] CONFIG_SAMPLE_RATE = 48000 on Windows → using 3LAS, MPXCapture disabled.");
+  } else if (osPlatform === "win32" && CONFIG_SAMPLE_RATE === 48000 && MPX_INPUT_CARD === "") {
+    // On Windows with 48 kHz we use 3LAS, not MPXCapture (unless MPXInputCard is set)
+    logWarn("[MPX] CONFIG_SAMPLE_RATE = 48000 on Windows (and no MPXInputCard) → using 3LAS, MPXCapture disabled.");
   } else {
     MPX_EXE_PATH = path.join(__dirname, "bin", runtimeFolder, binaryName);
     MPX_EXE_PATH = MPX_EXE_PATH.replace(/^['\"]+|['\"]+$/g, "");
@@ -959,16 +1144,15 @@ if (!ENABLE_MPX) {
   //-----------------------------------------------------------
   //  Start capture – choose between 3LAS PCM tap and MPXCapture
   //-----------------------------------------------------------
-  //
-  // USE_3LAS is true when
-  //  - any Linux system
-  //  - or Windows with sampleRate == 48000 in metricsmonitor.json
-  //-----------------------------------------------------------
   let rec = null;
+  // Treat "off" as empty string for safety
+  const explicitCard = MPX_INPUT_CARD !== "" && MPX_INPUT_CARD.toLowerCase() !== "off";
 
+  // 3LAS should ONLY be used if:
+  // 1. We are on Linux or Windows@48k
+  // 2. AND NO specific MPXInputCard is requested.
   const USE_3LAS =
-    osPlatform === "linux" ||
-    (osPlatform === "win32" && CONFIG_SAMPLE_RATE === 48000);
+    !explicitCard && CONFIG_SAMPLE_RATE === 48000;
 
   if (USE_3LAS) {
     // Attach to 3LAS audio stream
@@ -1023,13 +1207,33 @@ if (!ENABLE_MPX) {
   } else if (!fs.existsSync(MPX_EXE_PATH)) {
     logError("[MPX] MPXCapture binary not found at path:", MPX_EXE_PATH);
   } else {
-    // Windows / macOS: start C# MPXCapture @ SAMPLE_RATE (default 192 kHz)
+    // Windows / macOS (or Linux with specific Card)
     use3LasPcmFormat = false;
-    logInfo(
-      `[MPX] Starting MPXCapture (${osPlatform}/${osArch}) with SAMPLE_RATE = ${SAMPLE_RATE} Hz`
-    );
+    
+    // Ensure execution permissions on Linux/macOS
+    if (osPlatform !== "win32") {
+      try {
+        fs.chmodSync(MPX_EXE_PATH, 0o755);
+        // optional: logInfo(`[MPX] Set execution permissions for ${MPX_EXE_PATH}`);
+      } catch (err) {
+        logWarn(`[MPX] Failed to set execution permissions for ${MPX_EXE_PATH}:`, err);
+      }
+    }
+    
+    const args = [String(SAMPLE_RATE)];
+    
+    if (explicitCard) {
+      logInfo(`[MPX] Starting MPXCapture with specific device: "${MPX_INPUT_CARD}"`);
+      // We pass the card name directly as the second argument. 
+      // Spawn handles quoting for us.
+      args.push(MPX_INPUT_CARD);
+    } else {
+      logInfo(
+        `[MPX] Starting MPXCapture (${osPlatform}/${osArch}) with SAMPLE_RATE = ${SAMPLE_RATE} Hz (Default Device)`
+      );
+    }
 
-    rec = spawn(MPX_EXE_PATH, [String(SAMPLE_RATE)]);
+    rec = spawn(MPX_EXE_PATH, args);
 
     rec.stderr.on("data", (d) => {
       const text = d.toString().trim();
@@ -1047,9 +1251,11 @@ if (!ENABLE_MPX) {
         "signal:",
         signal || "none"
       );
+      if (explicitCard && code !== 0) {
+        logWarn(`[MPX] MPXCapture exited prematurely. Verify if device "${MPX_INPUT_CARD}" exists and is not in use.`);
+      }
     });
   }
-
 
   //-----------------------------------------------------------
   //  Send loop – always send only the latest MPX frame

@@ -6,6 +6,8 @@
   gap: 2px;
   position: relative;
   margin-left: 5px;
+  margin-top: 0px;
+  transform: translateY(10px); /* NEU: Passen Sie diesen Wert an, um den EQ zu verschieben */
 }
 
 /* Balkenblock – horizontal */
@@ -63,3 +65,31 @@
 .meter-bar[id^="eq"] .segment.peak-flag {
   box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
 }
+
+/* Vertical dB scale next to the meter bar */
+.meter-scale-equalizer {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 160px;
+  font-size: 9px;
+  color: #aaa;
+  margin-right: 4px;
+  text-align: right;
+  position: relative; /* Hinzugefügt */
+  top: 0px;           /* Hinzugefügt: Passen Sie diesen Wert bei Bedarf an */
+}
+
+/* Container für die Haupt-Signalanzeigen (Stereo + RF) */
+.signal-meters-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px; /* Abstand zwischen RF und der Stereo-Gruppe */
+  transform: translateY(10px); /* Verschiebt die Gruppe nach unten */
+}
+
+/* Original-Styling für den RF-Balken beibehalten/überschreiben */
+.signal-meters-group .level-meter {
+  transform: none; /* Setzt evtl. vorhandene Transformationen zurück */
+}
+

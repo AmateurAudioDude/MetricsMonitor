@@ -7,9 +7,17 @@ const sampleRate = 48000;    // Do not touch - this value is automatically updat
 const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 30;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 15;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+const pilotCalibration = 2;    // Do not touch - this value is automatically updated via the config file
+const mpxCalibration = 54;    // Do not touch - this value is automatically updated via the config file
+const rdsCalibration = 1.25;    // Do not touch - this value is automatically updated via the config file
+const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
 
   ///////////////////////////////////////////////////////////////
 
@@ -28,8 +36,13 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
   // Last real stereo state from the signal
   let prevStereoState = false;
-  // When true, L1 is active → force mono display
-  let forcedMonoByL1 = false;
+  
+  // Track if we are currently in forced mono state (based on socket message)
+  let currentIsForced = false;
+
+  // Track B2 State and Click Lock
+  let b2Active = false;
+  let isClickLocked = false;
 
   // Previous RDS state (for ramping meter on change)
   let prevRdsState = false;
@@ -51,135 +64,24 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     img.dataset.currentSrc = src;
   }
 
-  // ---------------------------------------------------------
-  // Stereo/Mono circle symbol helpers
-  // ---------------------------------------------------------
-
-  function getStereoIcon() {
-    return document.getElementById('stereoIcon');
-  }
-
-  function getStereoCircles() {
-    const icon = getStereoIcon();
-    if (!icon) return { c1: null, c2: null };
-
-    const c1 = icon.querySelector('.circle1');
-    const c2 = icon.querySelector('.circle2');
-    return { c1, c2 };
-  }
-
-  // Reset only style properties that this script may touch
-  function resetIconStyle(icon) {
-    if (!icon) return;
-    icon.style.opacity       = '';
-    icon.style.filter        = '';
-    icon.style.pointerEvents = '';
-    icon.style.cursor        = '';
-    icon.style.marginLeft    = '';
-	icon.style.marginRight   = '';
-  }
-
-  // Mono form: only circle1 visible, circle2 hidden
-  function applyMonoCircles(dimForced) {
-    const { c1, c2 } = getStereoCircles();
-    if (c1) {
-      c1.style.opacity = '1';
-      c1.style.display = '';
-      c1.style.filter  = '';
-      c1.style.marginLeft = '0px';
-      // fixed per request
-    }
-    if (c2) {
-      c2.style.opacity = '0';
-      c2.style.display = 'none';
-      c2.style.filter  = '';
-	  c2.style.marginLeft = '0px';
-    }
-  }
-
-  // Real stereo: both circles visible; icon style from CSS
-  function showStereoSymbol() {
-    const icon = getStereoIcon();
-    const { c1, c2 } = getStereoCircles();
-    if (!icon) return;
-
-    resetIconStyle(icon);
-    icon.classList.remove('stereo-mono');
-
-    if (c1) {
-      c1.style.opacity = '';
-      c1.style.filter  = '';
-      c1.style.display = '';
-    }
-    if (c2) {
-      c2.style.opacity = '';
-      c2.style.filter  = '';
-      c2.style.display = '';
-    }
-  }
-
-  // Mono:
-  //  • L0 (dimForced=false)
-  //  • L1 (dimForced=true)
-  function showMonoSymbol(dimForced) {
-    const icon = getStereoIcon();
-    if (!icon) return;
-
-    icon.classList.add('stereo-mono');
-
-    if (dimForced) {
-      // Forced mono (L1)
-      icon.style.opacity       = '1';
-      icon.style.pointerEvents = 'none';
-      icon.style.cursor        = 'default';
-	  if (prevStereoState) {
-		icon.style.marginLeft    = '4px';
-		icon.style.marginRight    = '0px';
-	  } else {
-		icon.style.marginLeft    = '4px';
-		icon.style.marginRight    = '0px';
-	  }
-    } else {
-      // Real mono (L0)
-      resetIconStyle(icon);
-    }
-
-    applyMonoCircles(dimForced);
-  }
-
-  function applyForcedMonoDisplay() {
-    showMonoSymbol(true);
-    // logInfo("Stereo header indicator forced to MONO (L1 active).");
-  }
-
-  function applyRealStereoDisplayFromPrev() {
-    const icon = getStereoIcon();
-    resetIconStyle(icon);
-
-    if (prevStereoState) {
-      showStereoSymbol();
-      logInfo("Stereo header indicator restored to STEREO (L0, real signal).");
-    } else {
-      showMonoSymbol(false);
-      logInfo("Stereo header indicator restored to MONO (L0, real signal).");
-    }
-  }
-
-  // Called from metricsmonitor.js after sending L0 / L1
+  // Called from metricsmonitor.js after sending L0 / L1 / B0 / B1 / B2
   function setMonoLockFromMode(cmdRaw) {
     const cmd = String(cmdRaw).trim().toUpperCase();
 
     if (cmd === "L1") {
-      forcedMonoByL1 = true;
-      logInfo('L1 from client – forcing stereo indicator to MONO.');
-      applyForcedMonoDisplay();
+      logInfo('L1 command received.');
     } else if (cmd === "L0") {
-      const wasLocked = forcedMonoByL1;
-      forcedMonoByL1 = false;
-      logInfo('L0 from client – restoring stereo indicator to real mono/stereo state.');
-      if (wasLocked) {
-        applyRealStereoDisplayFromPrev();
-      }
+      logInfo('L0 command received.');
+    } else if (cmd === "B2") {
+      logInfo('B2 received: Click disabled, B2 Mode active.');
+      b2Active = true;
+      isClickLocked = true;
+      // Force update icon if we have the last state
+      // (Wait for next socket message or trigger update manually if needed)
+    } else if (cmd === "B0" || cmd === "B1") {
+      logInfo(`${cmd} received: Click enabled, B2 Mode inactive.`);
+      b2Active = false;
+      isClickLocked = false;
     }
   }
 
@@ -188,6 +90,9 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
    * and update meters / icons / labels in the header.
    */
   function handleTextSocketMessage(message) {
+      
+    // console.log(message.st, message.stForced);  
+      
     const meters = window.MetricsMeters;
     if (!meters) return;
     const { levels, updateMeter } = meters;
@@ -233,24 +138,73 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       }
     }
 
-    // --- Stereo / Mono indicator (message.st) ---
+    // --- Stereo / Mono indicator (message.st & message.stForced) ---
     if (message.st !== undefined) {
       const isStereo = (message.st === true || message.st === 1);
+      // Assume stForced might be undefined if not sent, treat as false if missing
+      const isForced = (message.stForced === true || message.stForced === 1);
 
-      // remember real state for later restore on L0
+      // Update global state for click handler
+      currentIsForced = isForced;
       prevStereoState = isStereo;
 
-      if (forcedMonoByL1) {
-        // L1 active → immer Mono-Symbol, egal was st sendet
-        applyForcedMonoDisplay();
-      } else {
-        // Real display in L0
-        if (isStereo) {
-          showStereoSymbol();
-        } else {
-          showMonoSymbol(false);
+      // Update MetricsMeters logic (Pilot Meter)
+      if (window.MetricsMeters && typeof window.MetricsMeters.setStereoStatus === 'function') {
+          window.MetricsMeters.setStereoStatus(isStereo);
+      }
+
+      const stereoIcon = document.getElementById('stereoIcon');
+      let iconName = '';
+
+      // 1. Priority: B2 Mode Logic
+      if (b2Active) {
+        if (MPXStereoDecoder === "off") {
+            // "Wenn b2 ... und MPXStereoDecoder: off -> mono_on.png"
+            iconName = 'mpx_on.png';
+        } else if (MPXStereoDecoder === "on") {
+            // "MPXStereoDecoder: on und b2 ... und st=true und stForced=false -> stereo_off.png"
+            if (isStereo && !isForced) {
+                iconName = 'stereo_off.png';
+            } 
+            // "MPXStereoDecoder: on und b2 ... und st=false und stForced=true -> stereo_on.png"
+            else if (!isStereo && isForced) {
+                iconName = 'stereo_on.png';
+            }
         }
       }
+
+      // 2. Standard Logic (if no B2 rule applied)
+      if (!iconName) {
+        // "message.st = false und message.stForced = false dann mono_off.png"
+        if (!isStereo && !isForced) {
+            iconName = 'mono_off.png';
+        } 
+        else if (isStereo && !isForced) {
+            iconName = 'stereo_on.png';
+        } 
+        else if (!isStereo && isForced) {
+            iconName = 'mono_off.png';
+        } 
+        else if (isStereo && isForced) {
+            iconName = 'mono_on.png';
+        }
+      }
+
+      // Default fallback if still empty
+      if (!iconName) iconName = 'mono_off.png';
+
+      // Update Cursor style based on lock
+      if (stereoIcon) {
+          // Allow pointer if MPXStereoDecoder is on (toggling allowed even if B2 locked)
+          // OR if MPXmode is off (legacy override)
+          if (MPXStereoDecoder === "on" || MPXmode === "off") {
+               stereoIcon.style.cursor = 'pointer';
+          } else {
+               stereoIcon.style.cursor = isClickLocked ? 'default' : 'pointer';
+          }
+      }
+
+      setIconSrc(stereoIcon, `/js/plugins/MetricsMonitor/images/${iconName}`);
     }
 
     // --- ECC (Extended Country Code) badge ---
@@ -259,12 +213,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       // Clear previous content each update
       eccWrapper.innerHTML = "";
 
-      // Log incoming ECC value for debugging
-      // logInfo("ECC update received:", message.ecc);
-
       // Decide if there is a usable ECC flag.
-      // If .data-flag is missing or empty → no ECC.
-      // Additionally, if .data-flag contains an <i> with class 'flag-sm-UN' → treat as no ECC.
       const eccSpan = document.querySelector('.data-flag');
       const eccSpanHasContent = eccSpan && eccSpan.innerHTML && eccSpan.innerHTML.trim() !== "";
 
@@ -282,11 +231,8 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
       const hasEcc = eccSpanHasContent && !eccSpanIsPlaceholderUN && message.ecc !== undefined && message.ecc !== null && message.ecc !== "";
 
-      // logInfo("Computed hasEcc:", hasEcc, "eccSpanIsPlaceholderUN:", eccSpanIsPlaceholderUN);
-
       if (!hasEcc) {
         // No ECC → small "No ECC" badge
-        // logInfo("No ECC value found or placeholder UN → showing grey 'ECC' placeholder.");
         const noEcc = document.createElement('span');
         noEcc.textContent = 'ECC';
         noEcc.style.color = '#696969';
@@ -299,13 +245,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
         eccWrapper.appendChild(noEcc);
       } else {
         // ECC present → try to reuse existing ECC flag (if available)
-        logInfo(".data-flag element query result:", eccSpan);
-        if (eccSpan) {
-          const inner = eccSpan.innerHTML ? eccSpan.innerHTML.trim() : "";
-          logInfo(".data-flag innerHTML length:", inner.length, "preview:", inner.substring(0,120));
-        }
         if (eccSpan && eccSpan.innerHTML.trim() !== "") {
-          logInfo("Cloning .data-flag to eccWrapper.");
           eccWrapper.appendChild(eccSpan.cloneNode(true));
         } else {
           // Fallback: simple grey "ECC"
@@ -324,6 +264,12 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
     if (message.rds !== undefined) {
       const rdsIcon = document.getElementById('rdsIcon');
       const rdsOn = (message.rds === true || message.rds === 1);
+
+      // Update MetricsMeters logic (RDS Meter)
+      if (window.MetricsMeters && typeof window.MetricsMeters.setRdsStatus === 'function') {
+        window.MetricsMeters.setRdsStatus(rdsOn);
+      }
+
       if (rdsOn) {
         if (prevRdsState === false) {
           // bump meter on change to "on"
@@ -355,6 +301,139 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
         setIconSrc(taIcon, taOn ? '/js/plugins/MetricsMonitor/images/ta_on.png' : '/js/plugins/MetricsMonitor/images/ta_off.png');
       }
     }
+  }
+
+  // ... (setupTextSocket function remains unchanged) ...
+
+  /**
+   * Build and attach the header UI (ECC badge, stereo/mono, PTY label,
+   * TP/TA/RDS icons) into the given `iconsBar` container.
+   */
+  function initHeader(iconsBar) {
+
+    // --- Group: ECC badge + Stereo symbol + PTY label ---
+    const leftGroup = document.createElement('div');
+    leftGroup.style.display = 'flex';
+    leftGroup.style.alignItems = 'center';
+    leftGroup.style.gap = '10px';
+    iconsBar.appendChild(leftGroup);
+
+    // --- ECC wrapper ---
+    const eccWrapper = document.createElement('span');
+    eccWrapper.id = 'eccWrapper';
+    eccWrapper.style.display = 'inline-flex';
+    eccWrapper.style.alignItems = 'center';
+    eccWrapper.style.whiteSpace = 'nowrap';
+    leftGroup.appendChild(eccWrapper);
+
+    // Try to clone an existing ECC flag from TEF Logger UI, otherwise show "ECC"
+    const eccSpan = document.querySelector('.data-flag');
+    
+    // Decide whether eccSpan is usable or a UN placeholder:
+    const eccSpanHasContent = eccSpan && eccSpan.innerHTML && eccSpan.innerHTML.trim() !== "";
+    let eccSpanIsPlaceholderUN = false;
+    if (eccSpanHasContent) {
+      const iElem = eccSpan.querySelector('i');
+      if (iElem && iElem.className) {
+        const classes = iElem.className.split(/\s+/);
+        if (classes.includes('flag-sm-UN') || classes.some(c => c === 'flag-sm-UN')) {
+          eccSpanIsPlaceholderUN = true;
+        }
+      }
+    }
+
+    if (eccSpanHasContent && !eccSpanIsPlaceholderUN) {
+      logInfo("initHeader: cloning existing .data-flag into eccWrapper.");
+      eccWrapper.appendChild(eccSpan.cloneNode(true));
+    } else {
+      logInfo("initHeader: no usable .data-flag found or it's placeholder UN → adding placeholder 'ECC'.");
+      const noEcc = document.createElement('span');
+      noEcc.textContent = 'ECC';
+      noEcc.style.color = '#696969';
+      noEcc.style.fontSize = '13px';
+      eccWrapper.appendChild(noEcc);
+    }
+
+    // --- Stereo Icon (Image) ---
+    const stereoImg = document.createElement('img');
+    stereoImg.className = 'status-icon';
+    stereoImg.id = 'stereoIcon';
+    stereoImg.alt = 'Stereo';
+    
+    // Enable interaction
+    stereoImg.style.cursor = 'pointer';
+    stereoImg.style.pointerEvents = 'auto'; 
+
+    // Click Handler:
+    stereoImg.addEventListener('click', () => {
+        // Prevent action if Locked (B2 received), unless MPXStereoDecoder is on (where B2 is a valid toggle state)
+        // or MPXmode is off (where locking logic should not apply)
+        if (isClickLocked && MPXStereoDecoder !== "on" && MPXmode !== "off") {
+            logInfo("Stereo icon click ignored: Button is locked via B2.");
+            return;
+        }
+
+        if (TextSocket && TextSocket.readyState === WebSocket.OPEN) {
+
+            // NEU: Verhalten abhängig von MPXStereoDecoder
+            if (MPXStereoDecoder === "on") {
+                // b2Active = true  → Wir sind im Stereo-Modus (da B2 den Stereo-Modus definiert)
+                // b2Active = false → Wir sind im Mono-Modus (Standard)
+
+                if (b2Active) {
+                    // Wir sind Stereo -> Umschaltung auf Mono
+                    TextSocket.send("B1");
+                    TextSocket.send("L0");
+                    logInfo('Stereo icon clicked (MPXStereoDecoder=on, Switching to Mono). Sending commands: B1 + L0');
+                } else {
+                    // Wir sind Mono -> Umschaltung auf Stereo
+                    TextSocket.send("B2");
+                    TextSocket.send("L1");
+                    logInfo('Stereo icon clicked (MPXStereoDecoder=on, Switching to Stereo). Sending commands: B2 + L1');
+                }
+
+            } else {
+                // MPXStereoDecoder = "off" → altes Verhalten beibehalten
+                const cmd = currentIsForced ? "B0" : "B1";
+                TextSocket.send(cmd);
+                logInfo(`Stereo icon clicked. Sending command: ${cmd}`);
+            }
+
+        } else {
+            logError("Cannot send command, WebSocket is not open.");
+        }
+    });
+
+    // Initialize with default (stereo_off) or wait for first socket message
+    setIconSrc(stereoImg, '/js/plugins/MetricsMonitor/images/stereo_off.png');
+    leftGroup.appendChild(stereoImg);
+
+    // --- PTY label placeholder ---
+    const ptyLabel = document.createElement('span');
+    ptyLabel.id = 'ptyLabel';
+    ptyLabel.textContent = 'PTY';
+    ptyLabel.style.color = '#696969';
+    ptyLabel.style.fontSize = '13px';
+    ptyLabel.style.width = '100px';
+    leftGroup.appendChild(ptyLabel);
+
+    // --- TP / TA / RDS PNG icons ---
+    const iconMap = [
+      { id: 'tpIcon',  off: '/js/plugins/MetricsMonitor/images/tp_off.png' },
+      { id: 'taIcon',  off: '/js/plugins/MetricsMonitor/images/ta_off.png' },
+      { id: 'rdsIcon', off: '/js/plugins/MetricsMonitor/images/rds_off.png' }
+    ];
+    iconMap.forEach(({ id, off }) => {
+      const img = document.createElement('img');
+      img.className = 'status-icon';
+      img.id = id;
+      img.alt = id;
+      setIconSrc(img, off);
+      iconsBar.appendChild(img);
+    });
+
+    // Start WebSocket for text/status data
+    setupTextSocket();
   }
 
   /**
@@ -421,8 +500,7 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
 
     // Try to clone an existing ECC flag from TEF Logger UI, otherwise show "ECC"
     const eccSpan = document.querySelector('.data-flag');
-    logInfo("initHeader: .data-flag query result:", eccSpan);
-
+    
     // Decide whether eccSpan is usable or a UN placeholder:
     const eccSpanHasContent = eccSpan && eccSpan.innerHTML && eccSpan.innerHTML.trim() !== "";
     let eccSpanIsPlaceholderUN = false;
@@ -448,21 +526,71 @@ const MPXmode = "off";    // Do not touch - this value is automatically updated 
       eccWrapper.appendChild(noEcc);
     }
 
-    // --- Stereo circle symbol cloned from .stereo-container ---
-    const stereoSource = document.querySelector('.stereo-container');
-    if (stereoSource) {
-      const stereoClone = stereoSource.cloneNode(true);
-      stereoClone.id = 'stereoIcon';
-      stereoClone.removeAttribute('style');  // use our own layout
-      stereoClone.classList.add("tooltip");
-      stereoClone.setAttribute("data-tooltip", "Stereo / Mono indicator. Click to toggle.");
-      stereoClone.style.marginLeft = '0px';
-      stereoClone.style.cursor     = 'default'; // indicator only, no toggle
-      leftGroup.appendChild(stereoClone);
+    // --- Stereo Icon (Image) ---
+    const stereoImg = document.createElement('img');
+    stereoImg.className = 'status-icon';
+    stereoImg.id = 'stereoIcon';
+    stereoImg.alt = 'Stereo';
+    
+    // Enable interaction
+    stereoImg.style.cursor = 'pointer';
+    stereoImg.style.pointerEvents = 'auto'; 
 
-      // Initial look: treat as mono until first st value comes in
-      showMonoSymbol(false);
+// Click Handler:
+stereoImg.addEventListener('click', () => {
+    // Prevent action if Locked (B2 received), unless MPXStereoDecoder is on (where B2 is a valid toggle state)
+    // or MPXmode is off (where locking logic should not apply)
+    if (isClickLocked && MPXStereoDecoder !== "on" && MPXmode !== "off") {
+        logInfo("Stereo icon click ignored: Button is locked via B2.");
+        return;
     }
+
+    if (TextSocket && TextSocket.readyState === WebSocket.OPEN) {
+
+        // NEU: Verhalten abhängig von MPXStereoDecoder
+        if (MPXStereoDecoder === "on") {
+            // Wir nutzen b2Active als lokalen Toggle-Status.
+            // b2Active == true  -> Wir haben zuletzt B2 (Stereo) gesendet -> Nächster Klick: Mono
+            // b2Active == false -> Wir haben zuletzt B1 (Mono) gesendet   -> Nächster Klick: Stereo
+
+            if (b2Active) {
+                // Aktuell Stereo (B2) -> Umschaltung auf Mono
+                TextSocket.send("B1");
+                TextSocket.send("L0");
+                
+                // Status sofort manuell aktualisieren, damit der Toggle beim nächsten Klick funktioniert
+                b2Active = false; 
+                isClickLocked = false;
+
+                logInfo('Stereo icon clicked (MPXStereoDecoder=on, State: Stereo -> Switching to Mono). Sent: B1 + L0');
+            } else {
+                // Aktuell Mono (B1) -> Umschaltung auf Stereo
+                TextSocket.send("B2");
+                TextSocket.send("L1");
+
+                // Status sofort manuell aktualisieren
+                b2Active = true;
+                isClickLocked = true;
+
+                logInfo('Stereo icon clicked (MPXStereoDecoder=on, State: Mono -> Switching to Stereo). Sent: B2 + L1');
+            }
+
+        } else {
+            // MPXStereoDecoder = "off" → altes Verhalten beibehalten
+            const cmd = currentIsForced ? "B0" : "B1";
+            TextSocket.send(cmd);
+            logInfo(`Stereo icon clicked. Sending command: ${cmd}`);
+        }
+
+    } else {
+        logError("Cannot send command, WebSocket is not open.");
+    }
+});
+
+
+    // Initialize with default (stereo_off) or wait for first socket message
+    setIconSrc(stereoImg, '/js/plugins/MetricsMonitor/images/stereo_off.png');
+    leftGroup.appendChild(stereoImg);
 
     // --- PTY label placeholder ---
     const ptyLabel = document.createElement('span');
