@@ -69,6 +69,8 @@ Anyone wishing to perform stereo decoding using MPX Tool or similar should use t
 <img width="320" height="240" src="https://github.com/user-attachments/assets/429c8fb2-43ee-4eb1-ae98-06eae1dd0b6f" />
 <img width="320" height="240" src="https://github.com/user-attachments/assets/3cdebe6a-6eb6-4f7f-b7ad-364853d55f26" />
 
+You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
+
 ## Display modes
 
 ### Input: 48 kHz Mono/Stereo
