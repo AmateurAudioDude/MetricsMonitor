@@ -474,14 +474,11 @@ const MODULE_SEQUENCE = [1,2,0,3];    // Do not touch - this value is automatica
   }
 
   function checkUpdate(setupOnly, pluginName, urlUpdateLink, urlFetchLink) {
-      // Simplified for brevity, same logic as before
       const isSetupPath = (window.location.pathname || "/").indexOf("/setup") >= 0;
       let ver = typeof plugin_version !== "undefined" ? plugin_version : "Unknown";
       
       fetch(urlFetchLink, {cache: "no-store"}).then(r => r.text()).then(txt => {
-          const lines = txt.split("\n");
           let remoteVer = "Unknown";
-          // simple regex match
           const match = txt.match(/const\s+plugin_version\s*=\s*['"]([^'"]+)['"]/);
           if(match) remoteVer = match[1];
           
@@ -489,10 +486,31 @@ const MODULE_SEQUENCE = [1,2,0,3];    // Do not touch - this value is automatica
              mmLog('log', `Update available: ${ver} -> ${remoteVer}`);
              if(!setupOnly || isSetupPath) {
                  const settings = document.getElementById("plugin-settings");
-                 if(settings) settings.innerHTML += `<br><a href="${urlUpdateLink}" target="_blank">[${pluginName}] Update: ${ver} -> ${remoteVer}</a>`;
+                 if(settings) {
+                    settings.innerHTML += `<br><a href="${urlUpdateLink}" target="_blank">[${pluginName}] Update: ${ver} -> ${remoteVer}</a>`;
+                 }
+                 // red dot in menu
+                 const updateIcon =
+                   document.querySelector('.wrapper-outer #navigation .sidenav-content .fa-puzzle-piece')
+                   || document.querySelector('.wrapper-outer .sidenav-content')
+                   || document.querySelector('.sidenav-content');
+             
+                 if (updateIcon) {
+                   const redDot = document.createElement('span');
+                   redDot.style.cssText = `
+                     display: block;
+                     width: 12px;
+                     height: 12px;
+                     border-radius: 50%;
+                     background-color: #FE0830;
+                     margin-left: 82px;
+                     margin-top: -12px;
+                   `;
+                   updateIcon.appendChild(redDot);
+                 }
              }
           }
-      }).catch(e => {});
+      }).catch(e => { mmLog('error', `Update check for ${pluginName} failed`, e); });
   }
 
   function start() {
