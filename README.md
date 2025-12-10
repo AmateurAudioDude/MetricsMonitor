@@ -2,7 +2,7 @@
 
 FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equalizers and spectrum analyzer for FM audio, FM baseband and MPX signal.
 
-<img width="1623" height="290" alt="1" src="https://github.com/user-attachments/assets/34a4fb52-b436-4efa-8f21-29ffc559ee86" />
+<img width="1623" height="290" alt="1" src="https://github.com/user-attachments/assets/c7715559-0c71-4683-a75b-b7e8c56a38ea" />
 
 ## v1.2
 
@@ -53,46 +53,9 @@ The following variables can be changed in the metricsmonitor.json config file:
 
 After making changes to the metricsmonitor.json script, the server must be restarted and browser must be reloaded!!!
 
-## Hardware Configuration Recommendations
-<img width="320" height="240" src="https://github.com/user-attachments/assets/d376ee3c-1bb8-4d35-a8ab-a6ebb9605cb0" />
-<img width="320" height="240" src="https://github.com/user-attachments/assets/0921e9e6-3bf7-4fb3-b270-453994ef2032" />
-<img width="320" height="240" src="https://github.com/user-attachments/assets/76d4f89a-d588-496d-9ce0-0384b791673b" />
-
-## Display modes
-
-
-### Input: 48 kHz Mono/Stereo
-
-<img width="1431" height="263" alt="2a" src="https://github.com/user-attachments/assets/93c04fe6-7959-4d96-b3ca-bbc4bdb8034f" />
-
-
-    1 – MO/ST without PILOT/MPX/RDS    2 – only spectrum to 48 kHz       0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
-  
-### Input: 48 kHz MPX
-
-<img width="1603" height="290" alt="2b" src="https://github.com/user-attachments/assets/7e18d79c-2a3b-40dd-af25-ef7c712b7537" />
-
-
-    1 – Mono without PILOT/MPX/RDS   2 – spectrum to 48 kHz with PILOT    0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
-
-### Input: 96 kHz MPX
-
-<img width="1456" height="260" alt="3a" src="https://github.com/user-attachments/assets/6b724383-981a-4922-92c7-c0565391c9a6" />
-
-
-       1 – Mono without MPX/RDS     2 – spectrum to 38 kHz with PILOT     0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
-
-### Input: 192 kHz MPX
-
-<img width="1448" height="266" alt="4a" src="https://github.com/user-attachments/assets/7bbfba6a-37e5-44a5-86f4-496c60ae2267" />
-
-
-     1 – Mono with PILOT/MPX/RDS   2 – spectrum to 56 kHz with PILOT/RDS   0 – MO/ST with Equalizer     3 – MO/ST with Signal strength
-
 ## MPX Equipment
 
 ### ESP32 Receiver
-
 Make sure the correct PE5PVB firmware is installed. You can either use the software-based MPX switching ("MPXmode": "auto" or "on") or you can permanently activate the MPX output in the audio settings menu. MPX software switching for ESP32 TEF receivers has been added with the new [BETA firmware v2.20.5](https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip). Three modes are available (see configuration options!)
 
 ### Headless TEF
@@ -100,6 +63,41 @@ If the Headless TEF has a line-level audio output, the MPX output can be permane
 
 ### MPX Tool & Co.
 Anyone wishing to perform stereo decoding using MPX Tool or similar should use the settings "MPXmode": "on" and "MPXStereoDecoder": "on". This will result in permanent MPX output and stereo signaling on the display.
+
+## Hardware Configuration Recommendations
+<img width="320" height="240" src="https://github.com/user-attachments/assets/a5137a30-5acb-4802-857f-6a624f815db7" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/429c8fb2-43ee-4eb1-ae98-06eae1dd0b6f" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/3cdebe6a-6eb6-4f7f-b7ad-364853d55f26" />
+
+## Display modes
+
+### Input: 48 kHz Mono/Stereo
+
+<img width="1431" height="263" alt="2a" src="https://github.com/user-attachments/assets/76a708f3-c7e4-4f07-8a12-61eaab0f3521" />
+
+
+
+    1 – MO/ST without PILOT/MPX/RDS    2 – only spectrum to 48 kHz       0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
+  
+### Input: 48 kHz MPX
+
+<img width="1603" height="290" alt="2b" src="https://github.com/user-attachments/assets/7efff0ca-81cc-4cc2-a0a4-d449a04843f0" />
+
+
+    1 – Mono without PILOT/MPX/RDS   2 – spectrum to 48 kHz with PILOT    0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
+
+### Input: 96 kHz MPX
+
+<img width="1456" height="260" alt="3a" src="https://github.com/user-attachments/assets/73e84447-d22d-4f30-8724-d65f56567b7e" />
+
+
+       1 – Mono without MPX/RDS     2 – spectrum to 38 kHz with PILOT     0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
+
+### Input: 192 kHz MPX
+
+<img width="1448" height="266" alt="4a" src="https://github.com/user-attachments/assets/cb3801c3-ed30-4f76-b8f2-4da2e90436fb" />
+
+     1 – Mono with PILOT/MPX/RDS   2 – spectrum to 56 kHz with PILOT/RDS   0 – MO/ST with Equalizer     3 – MO/ST with Signal strength
 
 ## Important notes
 
