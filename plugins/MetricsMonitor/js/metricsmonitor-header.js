@@ -303,8 +303,6 @@ const LockVolumeSlider = true;    // Do not touch - this value is automatically 
     }
   }
 
-  // ... (setupTextSocket function remains unchanged) ...
-
   /**
    * Build and attach the header UI (ECC badge, stereo/mono, PTY label,
    * TP/TA/RDS icons) into the given `iconsBar` container.

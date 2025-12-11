@@ -90,19 +90,20 @@
 
 /* ECC */
 #eccWrapper {
-  margin-left: 10px;
+  margin-left: 10px
 }
 
 #eccWrapper .data-flag i {
   transform: scale(1.0) translate(-20px, 0.7px);
   transform-origin: top left;
   display: inline-block;
-  border: 1px solid #fff;
-  border-radius: 3px;
+  border: none;
+  border-radius: 3px; 
   margin-right: -17px;
   line-height: 1.1;
   box-sizing: border-box;
-  filter: contrast(200%) brightness(90%);
+  filter: contrast(175%) brightness(90%);
+  clip-path: inset(0.5px round 3px);
 }
 
 /* PTY */

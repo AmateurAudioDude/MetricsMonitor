@@ -4,17 +4,12 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 <img width="1623" height="290" alt="1" src="https://github.com/user-attachments/assets/c7715559-0c71-4683-a75b-b7e8c56a38ea" />
 
-## v1.2
+## v1.3
 
-- Additional  sound card for only MPX encoding can be activated
-- A new variable "ExtStereoDecoder" has been added to also activate the mono/stereo signaling when using a ext. stereo decoder e.q. MPX Tool
-- Optimization & fix calibration of level and analysis displays, the values ​​can be individually calibrated in the JSON file
-- Volume control can now be activated if needed
-- MPX Encode Script for 96/192 kHz sampling under Linux (Thanks to <@840861090375401501> )
-- Headless TEF software switching Mono <> Stereo <> MPX
-- Various zoom options for analyzer display (press STRG Button for options!)
-- Discreet real-time display of measured values ​​above the bar graph display
-- MPX Mode display integrated
+- Signal diagram with time display and frequency marking added (new module), press CTRL for individual zoom options
+- Quick module switching possible using numeric keys
+- White border removed from the ECC flag
+- Tooltip for module switching revised
 
 ## Installation notes
 
@@ -104,6 +99,7 @@ You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
 ## Important notes
 
 - Press the play button to activate the audio output and equalizer.
+- You can quickly switch between modules using the numeric keys. Which numbers are active depends on the number of activated modules. The counting always starts with the first value.
 - To avoid distorting the measurement results, the volume control is disabled after the plugin is installed! You can re-enable it via the configuration if needed.
 - The function of the modules depends on the input signal and the data rate used:
   0/3 = 48 kHz signal (mono or stereo) is sufficient.
@@ -111,7 +107,7 @@ You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
   2 = 48 kHz displays the FM audio spectrum up to 19 kHz, 96 kHz the FM baseband up to 38 kHz, and 192 kHz the MPX spectrum up to 56 kHz. For both sampling rates (96 and 192 kHz), the receiver must support MPX output (activate this via the menu or configuration if necessary).
 
 - The configuration file allows you to switch individual display modules on and off and define the click sequence. The various displays can also be calibrated there.
-- Press the CTRL key to select different zoom options in analysis mode
+- Press the CTRL key to select different zoom options in MPX + Signal analysis modes
 
 Compatibility with all hardware components and platforms cannot be guaranteed. The receiver's output volume, as well as the technical characteristics of the hardware components, affect the display behavior and must be taken into account!!!
 
@@ -123,6 +119,18 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v1.2
+
+- Additional  sound card for only MPX encoding can be activated
+- A new variable "ExtStereoDecoder" has been added to also activate the mono/stereo signaling when using a ext. stereo decoder e.q. MPX Tool
+- Optimization & fix calibration of level and analysis displays, the values ​​can be individually calibrated in the JSON file
+- Volume control can now be activated if needed
+- MPX Encode Script for 96/192 kHz sampling under Linux (Thanks to <@840861090375401501> )
+- Headless TEF software switching Mono <> Stereo <> MPX
+- Various zoom options for analyzer display (press STRG Button for options!)
+- Discreet real-time display of measured values ​​above the bar graph display
+- MPX Mode display integrated
 
 ### v1.1a
 
