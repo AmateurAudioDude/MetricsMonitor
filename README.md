@@ -42,7 +42,7 @@ The following variables can be changed in the metricsmonitor.json config file:
     "MPXInputCard": "",              //  Configure the sound input exclusive to MPX (e.g., for Linux: "plughw:CARD=Device" or Windows: "Microphone (HD USB Audio Device)")
 	"stereoBoost": 1,                //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
     "eqBoost": 1,                    //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
-    "MODULE_SEQUENCE": "1, 2, 0, 3"  //  Set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer / 3 - Audio + Signal Strength. Single values ​​or comma-separated values ​​can be entered: "0, 4" or "4" etc. ("1, 2, 0, 4" - default).
+    "MODULE_SEQUENCE": "1,2,0,3,4"   //  Set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer / 3 - Audio + Signal Strength / 4 - Signal Strength Analyzer. Single values ​​or comma-separated values ​​can be entered: "0, 4" or "4" etc. ("1, 2, 0, 4" - default).
     "LockVolumeSlider": true         //  The locked volume control in the browser can be unlocked if needed, but this will affect the measured values ​​(default is true).
 
 
