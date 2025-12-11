@@ -172,6 +172,7 @@ const configFilePath = path.join(
 //   1 = Level meters
 //   2 = Analyzer
 //   3 = Signalmeter
+//	 4 - Signal Analyzer (Plot)
 
 // Default plugin configuration
 const defaultConfig = {
@@ -190,7 +191,7 @@ const defaultConfig = {
   MPXInputCard: "",         // "" | "Name of Soundcard"
   stereoBoost: 1.0,
   eqBoost: 1.0,
-  MODULE_SEQUENCE: "1, 2, 0, 3",
+  MODULE_SEQUENCE: "1,2,0,3,4",
   LockVolumeSlider: true,
 };
 
