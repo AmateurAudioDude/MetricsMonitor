@@ -2,7 +2,7 @@
 
 FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equalizers and spectrum analyzer for FM audio, FM baseband and MPX signal.
 
-<img width="1623" height="290" alt="1" src="https://github.com/user-attachments/assets/c7715559-0c71-4683-a75b-b7e8c56a38ea" />
+<img width="1348" height="662" alt="1d" src="https://github.com/user-attachments/assets/96b5cdd7-ba36-48c4-b206-0ed803d4171d" />
 
 ## v1.3
 
@@ -66,13 +66,11 @@ Anyone wishing to perform stereo decoding using MPX Tool or similar should use t
 
 You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
 
-## Display modes
+## Display modes (Values ​​for MODULE_SEQUENCE)
 
 ### Input: 48 kHz Mono/Stereo
 
 <img width="1431" height="263" alt="2a" src="https://github.com/user-attachments/assets/76a708f3-c7e4-4f07-8a12-61eaab0f3521" />
-
-
 
     1 – MO/ST without PILOT/MPX/RDS    2 – only spectrum to 48 kHz       0 – MO/ST with Equalizer      3 – MO/ST with Signal strength
   
@@ -95,6 +93,12 @@ You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
 <img width="1448" height="266" alt="4a" src="https://github.com/user-attachments/assets/cb3801c3-ed30-4f76-b8f2-4da2e90436fb" />
 
      1 – Mono with PILOT/MPX/RDS   2 – spectrum to 56 kHz with PILOT/RDS   0 – MO/ST with Equalizer     3 – MO/ST with Signal strength
+
+### Signal Plot
+
+<img width="255" height="190" alt="Signal" src="https://github.com/user-attachments/assets/b148cbe7-b904-42a8-b9ad-6f3a753703bc" />
+
+     4 - activate Signal Plot 
 
 ## Important notes
 
