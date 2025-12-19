@@ -8,7 +8,8 @@ const sampleRate = 48000;    // Do not touch - this value is automatically updat
 const stereoBoost = 3;    // Do not touch - this value is automatically updated via the config file
 const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
+const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
 const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
 const pilotCalibration = 2;    // Do not touch - this value is automatically updated via the config file
 const mpxCalibration = 54;    // Do not touch - this value is automatically updated via the config file
@@ -35,7 +36,7 @@ const Y_STRETCH = 0.8;
 const GRID_X_OFFSET = 30;
 const BASE_SCALE_DB = [-10, -20, -30, -40, -50, -60, -70, -80];
 
-let MPX_AVERAGE_LEVELS = SpectrumAverageLevel;
+
 
 // Original dB range (for reset)
 const MPX_DB_MIN_DEFAULT = -80;
@@ -356,9 +357,10 @@ function handleMpxArray(data) {
 
   const len = Math.min(arr.length, mpxSmoothSpectrum.length);
   for (let i = 0; i < len; i++) {
-    mpxSmoothSpectrum[i] =
-      (mpxSmoothSpectrum[i] * (MPX_AVERAGE_LEVELS - 1) + arr[i]) /
-      MPX_AVERAGE_LEVELS;
+    const newValue = arr[i];
+    const oldValue = mpxSmoothSpectrum[i];
+    const smoothLevel = (newValue > oldValue) ? SpectrumAttackLevel : SpectrumDecayLevel;
+    mpxSmoothSpectrum[i] = (oldValue * (smoothLevel - 1) + newValue) / smoothLevel;
   }
 
   if (arr.length > len) {
