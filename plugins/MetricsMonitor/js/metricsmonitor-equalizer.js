@@ -1,35 +1,46 @@
 ///////////////////////////////////////////////////////////////
-///  METRICS MONITOR – Equalizer + Signal-Meter Module      ///
+//                                                           //
+//  metricsmonitor-equalizer.js						 (V1.4)  //
+//                                                           //
+//  by Highpoint               last update: 20.12.2025       //
+//                                                           //
+//  Thanks for support by                                    //
+//  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
+//                                                           //
+//  https://github.com/Highpoint2000/metricsmonitor          //
+//                                                           //
 ///////////////////////////////////////////////////////////////
 
 (() => {
+const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const CANVAS_SEQUENCE = [4,2];    // Do not touch - this value is automatically updated via the config file
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
-const pilotCalibration = 2;    // Do not touch - this value is automatically updated via the config file
-const mpxCalibration = 54;    // Do not touch - this value is automatically updated via the config file
-const rdsCalibration = 1.25;    // Do not touch - this value is automatically updated via the config file
-const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
-const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const MPXboost = 0;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
+const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const rdsCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
-
+const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
+
+// Configuration constants - updated automatically via config file
 ///////////////////////////////////////////////////////////////
 
-// internal: "dbf", "dbuv", "dbm"
+// Internal Unit State
 let hfUnit = "dbf";
-// Flag to ensure we only attach the unit-change listener once
 let hfUnitListenerAttached = false;
 
-// Levels (can be read/set from outside)
-//  - hf:      0..100 % for the bar
-//  - hfValue: physical value in current unit (dBµV / dBm / dBf)
-//  - hfBase:  base value (dBf, aligned with Scanner)
+// Levels (Publicly accessible)
 const levels = {
   hf: 0,
   hfValue: 0,
@@ -40,10 +51,10 @@ const levels = {
 
 const EQ_BAND_COUNT = 5;
 
-// Internal state for EQ display (5 bands)
+// EQ Display State
 const eqLevels = new Array(EQ_BAND_COUNT).fill(0);
 
-// Peak-hold configuration & state
+// Peak Hold Configuration
 const PEAK_CONFIG = {
   smoothing: 0.85,
   holdMs: 5000
@@ -59,57 +70,48 @@ const peaks = {
   eq5:   { value: 0, lastUpdate: Date.now() }
 };
 
-// AudioContext / analysers / buffers
+// Audio Context Variables
 let eqAudioContext = null;
 let eqAnalyser = null;
 let eqDataArray = null;
 let eqAnimationId = null;
 let eqSourceNode = null;
 
-// Stereo analyser
+// Stereo Analyser Variables
 let stereoSplitter = null;
 let stereoAnalyserL = null;
 let stereoAnalyserR = null;
 let stereoDataL = null;
 let stereoDataR = null;
 
-// Interval for regular re-setup
+// Setup Interval
 let eqSetupIntervalId = null;
 
 // -------------------------------------------------------
-// HF unit conversion & scale
-//
-// Base unit = dBf
-//   dBµV = dBf - 10.875
-//   dBm  = dBf - 119.75
-//   dBf  = dBf
+// HF Unit Conversion Helpers
 // -------------------------------------------------------
 
-// Base HF (dBf) -> display in current unit (dBµV / dBm / dBf)
+// Convert Base HF (dBf) to Display Value
 function hfBaseToDisplay(baseHF) {
   const ssu = (hfUnit || "").toLowerCase();
   const v = Number(baseHF);
   if (!isFinite(v)) return 0;
 
   if (ssu === "dbuv" || ssu === "dbµv" || ssu === "dbμv") {
-    // dBµV
     return v - 10.875;
   } else if (ssu === "dbm") {
-    // dBm
     return v - 119.75;
   } else if (ssu === "dbf") {
-    // dBf
     return v;
   }
   return v;
 }
 
-// Base HF (dBf) -> 0..100 % for HF bar, internally always mapped to 0..90 dBµV
+// Convert Base HF (dBf) to Percentage (for meter bar)
 function hfPercentFromBase(baseHF) {
   const v = Number(baseHF);
   if (!isFinite(v)) return 0;
 
-  // internal reference always dBµV: dBµV = dBf - 10.875
   let dBuV = v - 10.875;
   if (isNaN(dBuV)) dBuV = 0;
 
@@ -117,7 +119,7 @@ function hfPercentFromBase(baseHF) {
   return (clamped / 90) * 100;
 }
 
-// Build HF scale depending on current unit
+// Build Scale labels based on unit
   function buildHFScale(unit) {
     const baseScale_dBuV = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
     const ssu = (unit || hfUnit || "").toLowerCase();
@@ -132,7 +134,6 @@ function hfPercentFromBase(baseHF) {
       return baseScale_dBuV.map((v, idx) => {
         const dBm = v - 108.875;
         const rounded = round10(dBm);
-        // NEU: Einheit nur beim letzten Element (0) hinzufügen
         return idx === lastIndex ? `${rounded} dBm` : `${rounded}`;
       });
     }
@@ -141,7 +142,6 @@ function hfPercentFromBase(baseHF) {
       return baseScale_dBuV.map((v, idx) => {
         const dBf = v + 10.875;
         const rounded = round10(dBf);
-        // NEU: Einheit nur beim letzten Element (0) hinzufügen
         return idx === lastIndex ? `${rounded} dBf` : `${rounded}`;
       });
     }
@@ -149,16 +149,15 @@ function hfPercentFromBase(baseHF) {
     // Default: dBµV
     return baseScale_dBuV.map((v, idx) => {
       const rounded = round10(v);
-      // NEU: Einheit nur beim letzten Element (0) hinzufügen
       return idx === lastIndex ? `${rounded} dBµV` : `${rounded}`;
     });
   }
 
 
 // -------------------------------------------------------
-// Helpers: peaks & colors
+// Peak & Color Helpers
 // -------------------------------------------------------
-function updatePeakValue(channel, current /* 0..100 */) {
+function updatePeakValue(channel, current) {
   const p = peaks[channel];
   if (!p) return;
 
@@ -173,7 +172,7 @@ function updatePeakValue(channel, current /* 0..100 */) {
   }
 }
 
-function stereoColorForPercent(p /* 0..100 */, totalSegments = 30) {
+function stereoColorForPercent(p, totalSegments = 30) {
   const i = Math.max(
     0,
     Math.min(totalSegments - 1, Math.round((p / 100) * totalSegments) - 1)
@@ -189,7 +188,7 @@ function stereoColorForPercent(p /* 0..100 */, totalSegments = 30) {
   }
 }
 
-function setPeakSegment(meterEl, peak /* 0..100 */, meterId) {
+function setPeakSegment(meterEl, peak, meterId) {
   const segments = meterEl.querySelectorAll(".segment");
   if (!segments.length) return;
 
@@ -205,11 +204,11 @@ function setPeakSegment(meterEl, peak /* 0..100 */, meterId) {
 
   seg.classList.add("peak-flag");
 
-  // Stereo color
+  // Stereo Color Logic
   if (meterId && (meterId.includes("left") || meterId.includes("right"))) {
     seg.style.backgroundColor = stereoColorForPercent(peak, segments.length);
 
-  // EQ color
+  // EQ Color Logic
   } else if (meterId && meterId.startsWith("eq")) {
     if (idx >= segments.length - 5) {
       const red = Math.round((idx / 10) * 125);
@@ -222,7 +221,7 @@ function setPeakSegment(meterEl, peak /* 0..100 */, meterId) {
 }
 
 // -------------------------------------------------------
-// Meter creation & update
+// Meter Creation & Updating
 // -------------------------------------------------------
 function createLevelMeter(id, label, container, scaleValues) {
   const levelMeter = document.createElement("div");
@@ -241,7 +240,7 @@ function createLevelMeter(id, label, container, scaleValues) {
     meterBar.appendChild(segment);
   }
 
-  // Peak marker for LEFT/RIGHT (EQ uses only peak-flag)
+  // Peak Marker only for Stereo channels
   if (id.includes("left") || id.includes("right")) {
     const marker = document.createElement("div");
     marker.className = "peak-marker";
@@ -292,7 +291,7 @@ function updateMeter(meterId, level) {
         meterId.includes("right") ||
         meterId.startsWith("eq")
       ) {
-        // Stereo & EQ: green → red
+        // Stereo & EQ: Green to Red
         if (i >= segments.length - 5) {
           const red = Math.round((i / 10) * 125);
           seg.style.backgroundColor = `rgb(${red},0,0)`;
@@ -301,8 +300,7 @@ function updateMeter(meterId, level) {
           seg.style.backgroundColor = `rgb(0,${green},0)`;
         }
       } else if (meterId.includes("hf")) {
-        // HF: red in lower range, then green
-        // (internally still based on dBµV threshold at 20/90)
+        // HF: Red in lower range, then Green
         const hfThresholdIndex = Math.round((20 / 90) * segments.length);
         if (i < hfThresholdIndex) {
           const pos = i / hfThresholdIndex;
@@ -313,7 +311,7 @@ function updateMeter(meterId, level) {
           seg.style.backgroundColor = `rgb(0,${green},0)`;
         }
       } else {
-        // Default gradient
+        // Default Gradient
         if (i < segments.length * 0.6) {
           seg.style.backgroundColor = "#4caf50";
         } else if (i < segments.length * 0.8) {
@@ -333,7 +331,8 @@ function updateMeter(meterId, level) {
   if (isStereo || isEq) {
     let key;
     if (isStereo) {
-      key = meterId.includes("left") ? "left" : "right";
+      if (meterId.includes("left")) key = "left";
+      else if (meterId.includes("right")) key = "right";
     } else {
       const match = meterId.match(/^eq(\d+)-/);
       if (match) key = `eq${match[1]}`;
@@ -346,7 +345,7 @@ function updateMeter(meterId, level) {
 }
 
 // -------------------------------------------------------
-// EQ calculation (10-band → 5-band)
+// EQ Calculation (10-band -> 5-band)
 // -------------------------------------------------------
 function mmCompute10BandLevels(freqData) {
   const bands = new Array(10).fill(0);
@@ -389,7 +388,7 @@ function mmCollapse10To5(bands10) {
 }
 
 // -------------------------------------------------------
-// Equalizer hint overlay
+// UI Overlay Helpers
 // -------------------------------------------------------
 function hideEqHint() {
   const hint = document.getElementById("eqHintText");
@@ -401,18 +400,16 @@ function hideEqHint() {
 }
 
 // -------------------------------------------------------
-// Audio EQ setup (Stream.Fallback.Player.Amplification)
+// Audio Setup (Web Audio API)
 // -------------------------------------------------------
 function setupAudioEQ() {
-  // Wait until Stream object is available
   if (
     typeof Stream === "undefined" ||
-    !Stream || // Hinzugefügt: Prüft explizit auf null/false
+    !Stream ||
     !Stream.Fallback ||
     !Stream.Fallback.Player ||
     !Stream.Fallback.Player.Amplification
   ) {
-    // retry later
     setTimeout(setupAudioEQ, 2000);
     return;
   }
@@ -421,7 +418,6 @@ function setupAudioEQ() {
   const sourceNode = player.Amplification;
 
   if (!sourceNode || !sourceNode.context) {
-    console.warn("MetricsEqualizer: No valid AudioNode for Amplification found – retry…");
     setTimeout(setupAudioEQ, 2000);
     return;
   }
@@ -429,7 +425,7 @@ function setupAudioEQ() {
   try {
     const ctx = sourceNode.context;
 
-    // If AudioContext changed → reset graph
+    // Reset if AudioContext changed
     if (eqAudioContext !== ctx) {
       eqAudioContext   = ctx;
       eqAnalyser       = null;
@@ -442,7 +438,6 @@ function setupAudioEQ() {
       eqSourceNode     = null;
     }
 
-    // Create main EQ analyser if needed
     if (!eqAnalyser || !eqDataArray) {
       eqAnalyser = eqAudioContext.createAnalyser();
       eqAnalyser.fftSize = 4096;
@@ -450,13 +445,10 @@ function setupAudioEQ() {
       eqDataArray = new Uint8Array(eqAnalyser.frequencyBinCount);
     }
 
-    // Store source node
     eqSourceNode = sourceNode;
+    
+    try { eqSourceNode.connect(eqAnalyser); } catch(e){}
 
-    // Connect main analyser
-    eqSourceNode.connect(eqAnalyser);
-
-    // Create stereo split
     if (!stereoSplitter) {
       stereoSplitter  = eqAudioContext.createChannelSplitter(2);
       stereoAnalyserL = eqAudioContext.createAnalyser();
@@ -468,12 +460,11 @@ function setupAudioEQ() {
       stereoDataL = new Uint8Array(stereoAnalyserL.frequencyBinCount);
       stereoDataR = new Uint8Array(stereoAnalyserR.frequencyBinCount);
 
-      eqSourceNode.connect(stereoSplitter);
+      try { eqSourceNode.connect(stereoSplitter); } catch(e){}
       stereoSplitter.connect(stereoAnalyserL, 0);
       stereoSplitter.connect(stereoAnalyserR, 1);
     }
 
-    // Start animation loop only once
     if (!eqAnimationId) {
       startEqAnimation();
     }
@@ -493,7 +484,7 @@ function startEqAnimation() {
       return;
     }
 
-    // ---- Equalizer (frequency domain) ----
+    // ---- Equalizer Calculation ----
     eqAnalyser.getByteFrequencyData(eqDataArray);
     const levels10 = mmCompute10BandLevels(eqDataArray);
     const bands5 = mmCollapse10To5(levels10);
@@ -501,24 +492,19 @@ function startEqAnimation() {
     for (let i = 0; i < EQ_BAND_COUNT; i++) {
       let targetPercent = 0;
       if (bands5 && bands5[i] != null) {
-        // Base level from FFT → 0..100 %
         targetPercent = (bands5[i] / 255) * 100;
-        // Manual gain control for equalizer
         targetPercent *= eqBoost;
       }
 
-      // clamp, so nothing goes above 100 %
       if (targetPercent > 100) targetPercent = 100;
       if (targetPercent < 0) targetPercent = 0;
 
-      // smooth towards target (no HF gating anymore)
       eqLevels[i] += (targetPercent - eqLevels[i]) * 0.4;
-
       if (eqLevels[i] < 0.5) eqLevels[i] = 0;
       updateMeter(`eq${i + 1}-meter`, eqLevels[i]);
     }
 
-    // ---- Stereo LEFT / RIGHT (time domain) ----
+    // ---- Stereo Calculation ----
     if (stereoAnalyserL && stereoAnalyserR && stereoDataL && stereoDataR) {
       stereoAnalyserL.getByteTimeDomainData(stereoDataL);
       stereoAnalyserR.getByteTimeDomainData(stereoDataR);
@@ -541,12 +527,12 @@ function startEqAnimation() {
       levelL = Math.min(100, Math.max(0, levelL));
       levelR = Math.min(100, Math.max(0, levelR));
 
-      // No HF gating here anymore – pure audio
       levels.left = levelL;
       levels.right = levelR;
 
-      updateMeter("left-meter", levelL);
-      updateMeter("right-meter", levelR);
+      // Use unique IDs to avoid conflict
+      updateMeter("eq-left-meter", levelL);
+      updateMeter("eq-right-meter", levelR);
     }
 
     eqAnimationId = requestAnimationFrame(loop);
@@ -556,7 +542,7 @@ function startEqAnimation() {
 }
 
 // -------------------------------------------------------
-// Public init
+// Public Initialization
 // -------------------------------------------------------
 function initEqualizer(containerOrId = "level-meter-container") {
   const container =
@@ -564,15 +550,8 @@ function initEqualizer(containerOrId = "level-meter-container") {
       ? document.getElementById(containerOrId)
       : containerOrId;
 
-  if (!container) {
-    console.error(
-      "MetricsEqualizer: Level-meter container not found:",
-      containerOrId
-    );
-    return;
-  }
+  if (!container) return;
 
-  // Get HF unit from global MetricsMonitor (if available)
   if (window.MetricsMonitor && typeof window.MetricsMonitor.getSignalUnit === "function") {
     const u = window.MetricsMonitor.getSignalUnit();
     if (u) {
@@ -580,44 +559,36 @@ function initEqualizer(containerOrId = "level-meter-container") {
     }
   }
 
-  // clear existing content
   container.innerHTML = "";
 
-  // Eigener Container für die Haupt-Pegel (Stereo + RF)
   const signalMetersGroup = document.createElement("div");
   signalMetersGroup.classList.add("signal-meters-group");
 
-  // Stereo-Gruppe erstellen
   const stereoGroup = document.createElement("div");
   stereoGroup.classList.add("stereo-group");
   
   const stereoScale = [
-    "+5,0 dB",
-    "0,0",
-    "-5,0",
-    "-10,0",
-    "-15,0",
-    "-20,0",
-    "-25,0",
-    "-30,0",
-    "-35,0 dB"
+    "+5 dB",
+    "0",
+    "-5",
+    "-10",
+    "-15",
+    "-20",
+    "-25",
+    "-30",
+    "-35 dB"
   ];
   
-  // Stereo-Pegel in die Stereo-Gruppe einfügen
-  createLevelMeter("left-meter", "LEFT", stereoGroup, stereoScale);
-  createLevelMeter("right-meter", "RIGHT", stereoGroup, []);
+  createLevelMeter("eq-left-meter", "LEFT", stereoGroup, stereoScale);
+  createLevelMeter("eq-right-meter", "RIGHT", stereoGroup, []);
   
-  // Stereo-Gruppe dem neuen Haupt-Container hinzufügen
   signalMetersGroup.appendChild(stereoGroup);
 
-  // HF-Pegel direkt in den neuen Haupt-Container einfügen
   const hfScale = buildHFScale(hfUnit);
   createLevelMeter("hf-meter", "RF", signalMetersGroup, hfScale);
   
-  // Den neuen Haupt-Container zum finalen Container hinzufügen
   container.appendChild(signalMetersGroup);
 
-  // EQ group
   const eqGroup = document.createElement("div");
   eqGroup.classList.add("eq-group");
 
@@ -626,7 +597,6 @@ function initEqualizer(containerOrId = "level-meter-container") {
   eqTitle.innerText = "5-BAND EQUALIZER";
   eqGroup.appendChild(eqTitle);
 
-    // --- HINT OVERLAY ---
   const eqHintWrapper = document.createElement("div");
   eqHintWrapper.id = "eqHintWrapper";
   const eqHintText = document.createElement("div");
@@ -649,21 +619,19 @@ function initEqualizer(containerOrId = "level-meter-container") {
   eqGroup.appendChild(eqBars);
   container.appendChild(eqGroup);
 
-  // initial values
-  updateMeter("left-meter", levels.left);
-  updateMeter("right-meter", levels.right);
+  // Initial Values
+  updateMeter("eq-left-meter", levels.left);
+  updateMeter("eq-right-meter", levels.right);
   updateMeter("hf-meter", levels.hf || 0);
   for (let i = 1; i <= EQ_BAND_COUNT; i++) {
     updateMeter(`eq${i}-meter`, 0);
   }
 
-  // Start audio EQ + periodic re-setup
   setupAudioEQ();
   if (!eqSetupIntervalId) {
     eqSetupIntervalId = setInterval(setupAudioEQ, 3000);
   }
 
-  // Attach global unit-change listener only once
   if (!hfUnitListenerAttached && window.MetricsMonitor && typeof window.MetricsMonitor.onSignalUnitChange === "function") {
     hfUnitListenerAttached = true;
     window.MetricsMonitor.onSignalUnitChange((unit) => {
@@ -680,9 +648,6 @@ function initEqualizer(containerOrId = "level-meter-container") {
 window.MetricsEqualizer = {
   init: initEqualizer,
 
-  // HF is passed in BASE unit (dBf), same as Scanner:
-  // -> display unit computed via hfUnit
-  // -> bar level internally mapped from 0..90 dBµV to 0..100 %
   setHF(baseValue) {
     const v = Number(baseValue);
     if (!isFinite(v)) return;
@@ -696,38 +661,20 @@ window.MetricsEqualizer = {
     updateMeter("hf-meter", percent);
   },
 
-  // Change HF unit at runtime (e.g. when dropdown in loader changes)
   setHFUnit(unit) {
-    console.log("[Equalizer] setHFUnit() :: new unit =", unit);
-
-    if (!unit) {
-      console.warn("[Equalizer] setHFUnit(): unit is empty");
-      return;
-    }
-
+    if (!unit) return;
     hfUnit = unit.toLowerCase();
 
     const meterEl = document.getElementById("hf-meter");
-    if (!meterEl) {
-      console.warn("[Equalizer] setHFUnit(): HF meter not in DOM!");
-      return;
-    }
+    if (!meterEl) return;
 
     const levelMeter = meterEl.closest(".level-meter");
-    if (!levelMeter) {
-      console.warn("[Equalizer] setHFUnit(): .level-meter wrapper missing!");
-      return;
-    }
+    if (!levelMeter) return;
 
     const scaleEl = levelMeter.querySelector(".meter-scale-equalizer");
-    if (!scaleEl) {
-      console.warn("[Equalizer] setHFUnit(): scale container not found!");
-      return;
-    }
+    if (!scaleEl) return;
 
     const newScale = buildHFScale(hfUnit);
-    console.log("[Equalizer] New HF scale =", newScale);
-
     const ticks = scaleEl.querySelectorAll("div");
     newScale.forEach((txt, idx) => {
       if (ticks[idx]) {
@@ -738,7 +685,6 @@ window.MetricsEqualizer = {
     if (typeof levels.hfBase === "number") {
       const displayHF = hfBaseToDisplay(levels.hfBase);
       levels.hfValue = displayHF;
-      console.log("[Equalizer] Recalculated HF value =", displayHF);
     }
   },
 

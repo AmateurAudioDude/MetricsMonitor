@@ -1,135 +1,780 @@
 ///////////////////////////////////////////////////////////////
-//      METRICS MONITOR — SIGNAL ANALYZER MODULE             //
+//                                                           //
+//  metricsmonitor-signal-analyzer.js				 (V1.4)  //
+//                                                           //
+//  by Highpoint               last update: 20.12.2025       //
+//                                                           //
+//  Thanks for support by                                    //
+//  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
+//                                                           //
+//  https://github.com/Highpoint2000/metricsmonitor          //
+//                                                           //
 ///////////////////////////////////////////////////////////////
 
-const originalOnError = window.onerror;
-window.onerror = function(message, source, lineno, colno, error) {
-  const msg = typeof message === 'string' ? message : '';
-
-  const knownErrors = [
-    "Cannot read properties of undefined (reading 'getDatasetMeta')",
-    "Cannot set properties of null (setting '_setStyle')"
-  ];
-
-  const isKnownError = knownErrors.some(knownError => msg.includes(knownError));
-
-  if (isKnownError) {
-    return true; 
-  }
-  
-  if (originalOnError) {
-    return originalOnError.apply(this, arguments);
-  }
-  
-  return false;
-};
 
 (() => {
-  // --- Global State ---
-  
-  let socket = null;
-  let isSocketConnected = false;
+const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const CANVAS_SEQUENCE = [4,2];    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+const MPXboost = 0;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
+const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
+const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
+const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const rdsCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
+const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
+const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
+
+  'use strict';
 
-  // Global Chart Instance
-  let signalChart = null;
-  
-  // Persistent Data Storage
-  let storedSignalData = [];
+  const CONFIG = (window.MetricsMonitor && window.MetricsMonitor.Config) ? window.MetricsMonitor.Config : {};
+  const HUB_KEY = "__MM_SIGNAL_ANALYZER_HUB__";
 
-  // State for Frequency Change Detection
-  let lastFreq = null;
-  let lastLabelTime = 0;
+  // These are the known Chart.js + chartjs-plugin-streaming race errors during destroy/rebuild/hide.
+  // We:
+  //  1) avoid calling update when Chart isn't alive
+  //  2) pause & stop streaming timers before destroy
+  //  3) suppress these specific console errors globally (without overriding window.onerror)
+  const QUIET_ERROR_SUBSTRINGS = [
+    "getDatasetMeta",
+    "_setStyle",
+    "Cannot read properties of undefined (reading 'getDatasetMeta')",
+    "Cannot read properties of undefined",
+    "Cannot set properties of null",
+    "Cannot read properties of null",
+    "Cannot read properties of null (reading 'x')",
+    "Cannot read properties of null (reading 'y')",
+  ];
 
-  // Zoom / Pan State
-  let isDragging = false;
-  let hasDragged = false; 
-  let lastY = 0;
-  
-  // Tooltip and Keyboard State
-  let tooltipElement = null;
-  let ctrlKeyPressed = false;
-  let ctrlKeyWasPressed = false;
-  
-  // Default Configuration (Base Unit: dBf)
-  const Y_MIN_DEFAULT_BASE = 0;
-  const Y_MAX_DEFAULT_BASE = 100;
+  const Y_MIN_DEFAULT = 0;    // dBf
+  const Y_MAX_DEFAULT = 100;  // dBf
   const DURATION_DEFAULT = 20000;
 
-  // Current Measurement Unit
-  let currentUnit = "dbf"; // default
-
-  // Unit Configuration
-  const UNIT_CONFIG = {
-    dbf: { label: "dBf" },
-    dbuv: { label: "dBµV" },
-    dbm: { label: "dBm" }
-  };
-
-  // --- Persistent View State ---
-  // Stores limits in DISPLAY UNITS to simplify logic
-  let currentZoomState = {
-      yMin: Y_MIN_DEFAULT_BASE,
-      yMax: Y_MAX_DEFAULT_BASE,
-      duration: DURATION_DEFAULT,
-      lastUnit: "dbf" 
-  };
-  
-  // --- Helper: Conversion Logic ---
-  function convertValue(baseValue, targetUnit) {
-      const ssu = (targetUnit || "").toLowerCase();
-      const v = Number(baseValue);
-      if (!isFinite(v)) return 0;
-      
-      if (ssu === "dbuv" || ssu === "dbµv" || ssu === "dbμv") return v - 10.875;
-      if (ssu === "dbm") return v - 119.75;
-      
-      // Default: dBf (no change)
-      return v;
+  function isQuietErrorMessage(msg) {
+    const s = String(msg || "");
+    return QUIET_ERROR_SUBSTRINGS.some(k => s.includes(k));
   }
 
-  // --- Helper: Reverse Conversion Logic ---
-  function convertValueInverse(displayValue, sourceUnit) {
-      const ssu = (sourceUnit || "").toLowerCase();
-      const v = Number(displayValue);
-      if (!isFinite(v)) return 0;
+  function isChartAlive(chart) {
+    if (!chart) return false;
+    if (!chart.canvas || !chart.ctx) return false;
 
-      if (ssu === "dbuv" || ssu === "dbµv" || ssu === "dbμv") return v + 10.875;
-      if (ssu === "dbm") return v + 119.75;
-      
-      return v;
+    // Canvas removed from DOM? treat as not alive.
+    if (typeof chart.canvas.isConnected === "boolean" && !chart.canvas.isConnected) return false;
+
+    const ds = chart.data?.datasets;
+    if (!Array.isArray(ds) || ds.length === 0) return false;
+
+    return true;
   }
 
-  // --- Helper: Update cursor style based on zoom state ---
-  function updateCursorStyle(canvas) {
-      if (!signalChart || !canvas) return;
-      const yAxis = signalChart.options.scales.y;
-      
-      // Compare current axis limits to default limits for CURRENT unit
-      const defaultMin = convertValue(Y_MIN_DEFAULT_BASE, currentUnit);
-      const defaultMax = convertValue(Y_MAX_DEFAULT_BASE, currentUnit);
-      
-      // Allow small float tolerance
-      const isVerticallyZoomed = Math.abs(yAxis.min - defaultMin) > 0.5 || Math.abs(yAxis.max - defaultMax) > 0.5;
+  // Stop chartjs-plugin-streaming timers/RAF as best-effort (plugin internals differ by version).
+  function stopStreamingTimers(chart) {
+    if (!chart) return;
 
-      if (ctrlKeyPressed) {
-          canvas.style.cursor = "help"; 
-      } else if (isDragging) {
-          canvas.style.cursor = "grabbing";
-      } else if (isVerticallyZoomed) {
-          canvas.style.cursor = "ns-resize"; 
-      } else {
-          canvas.style.cursor = "pointer"; 
+    try { chart.stop?.(); } catch {}
+
+    // Best-effort: pause realtime scale first
+    try {
+      const rt = chart.options?.scales?.x?.realtime;
+      if (rt) rt.pause = true;
+    } catch {}
+
+    // Best-effort: clear plugin timers if present
+    try {
+      const s =
+        chart.$streaming ||
+        chart.$realtime ||
+        chart._streaming ||
+        chart.streaming ||
+        (chart.options?.plugins && (chart.options.plugins.streaming || chart.options.plugins.realtime));
+
+      const maybeClearInterval = (id) => {
+        if (typeof id === "number") {
+          try { clearInterval(id); } catch {}
+          try { clearTimeout(id); } catch {}
+        }
+      };
+
+      const maybeCancelRaf = (id) => {
+        if (typeof id === "number") {
+          try { cancelAnimationFrame(id); } catch {}
+        }
+      };
+
+      if (s && typeof s === "object") {
+        maybeClearInterval(s.refreshTimerID);
+        maybeClearInterval(s.refreshTimer);
+        maybeClearInterval(s.timerID);
+        maybeClearInterval(s.timer);
+        maybeClearInterval(s._refreshTimerID);
+        maybeClearInterval(s._timerID);
+
+        maybeCancelRaf(s.frameRequestID);
+        maybeCancelRaf(s.frameRequest);
+        maybeCancelRaf(s._frameRequestID);
       }
+    } catch {}
   }
 
-  // --- Tooltip Functions ---
-  function showTooltip() {
-      if (tooltipElement || !signalChart) return;
-      const canvas = signalChart.canvas;
-      
-      tooltipElement = document.createElement("div");
-      tooltipElement.id = "signal-zoom-tooltip";
-      tooltipElement.innerHTML = `
+  function safeUpdate(chart, mode) {
+    if (!isChartAlive(chart)) return;
+    try {
+      chart.update(mode || 'none');
+    } catch (e) {
+      const msg = String(e && (e.message || e) || "");
+      if (isQuietErrorMessage(msg)) return;
+      // eslint-disable-next-line no-console
+      console.warn("[MetricsSignalAnalyzer] Chart update error:", e);
+    }
+  }
+
+  function normalizeUnit(u) {
+    const s = String(u || "dbf").toLowerCase();
+    if (s === "dbµv" || s === "dbμv") return "dbuv";
+    if (s === "dbuv") return "dbuv";
+    if (s === "dbm") return "dbm";
+    return "dbf";
+  }
+
+  function getCurrentUnit() {
+    const u = (window.MetricsMonitor && typeof window.MetricsMonitor.getSignalUnit === "function")
+      ? window.MetricsMonitor.getSignalUnit()
+      : "dbf";
+    return normalizeUnit(u);
+  }
+
+  // Convert from base dBf to display unit
+  function convertValue(dbfValue, targetUnit) {
+    const unit = normalizeUnit(targetUnit);
+    const v = Number(dbfValue);
+    if (!isFinite(v)) return 0;
+    if (unit === "dbuv") return v - 10.875;
+    if (unit === "dbm") return v - 119.75;
+    return v;
+  }
+
+  function unitLabel(unit) {
+    const u = normalizeUnit(unit);
+    if (u === "dbuv") return "dBµV";
+    if (u === "dbm") return "dBm";
+    return "dBf";
+  }
+
+  function ensureHub() {
+    if (window[HUB_KEY]) return window[HUB_KEY];
+
+    const hub = {
+      socket: null,
+      isConnected: false,
+      hasSocketListener: false,
+
+      instances: new Map(),
+
+      // Shared data buffer (base dBf)
+      data: [],
+      lastFreq: null,
+      lastLabelTime: 0,
+
+      // Global input routing
+      activeKey: null,
+      draggingKey: null,
+      ctrlPressed: false,
+
+      // Unit handling
+      unit: getCurrentUnit(),
+      unitSubscribed: false,
+
+      // Global listeners
+      globalMouseInstalled: false,
+      globalKeyInstalled: false,
+
+      // Global error suppression (specific known streaming races)
+      errorSuppressionInstalled: false,
+
+      // Throttle broadcasts
+      lastBroadcastTs: 0,
+      broadcastQueued: false,
+    };
+
+    window[HUB_KEY] = hub;
+
+    ensureErrorSuppression(hub);
+    ensureSocket(hub);
+    ensureUnitSubscription(hub);
+    ensureGlobalListeners(hub);
+
+    return hub;
+  }
+
+  // Suppress ONLY the known benign Chart.js streaming race errors, without overriding window.onerror.
+  function ensureErrorSuppression(hub) {
+    if (hub.errorSuppressionInstalled) return;
+
+    // Capture phase so we can prevent console noise earlier.
+    window.addEventListener("error", (ev) => {
+      try {
+        const msg = String(ev?.message || ev?.error?.message || ev?.error || "");
+        if (!isQuietErrorMessage(msg)) return;
+        ev.preventDefault?.();
+        ev.stopImmediatePropagation?.();
+      } catch {}
+    }, true);
+
+    window.addEventListener("unhandledrejection", (ev) => {
+      try {
+        const reason = ev?.reason;
+        const msg = String(reason?.message || reason || "");
+        if (!isQuietErrorMessage(msg)) return;
+        ev.preventDefault?.();
+        ev.stopImmediatePropagation?.();
+      } catch {}
+    }, true);
+
+    hub.errorSuppressionInstalled = true;
+  }
+
+  async function ensureSocket(hub) {
+    if (hub.isConnected || hub.hasSocketListener) return;
+
+    const attach = async () => {
+      if (hub.hasSocketListener) return;
+      if (!window.socketPromise) {
+        setTimeout(attach, 750);
+        return;
+      }
+
+      try {
+        hub.socket = await window.socketPromise;
+        if (!hub.socket) {
+          setTimeout(attach, 750);
+          return;
+        }
+
+        hub.socket.addEventListener("message", (evt) => {
+          let msg = null;
+          try { msg = JSON.parse(evt.data); } catch { return; }
+          if (!msg || msg.sig === undefined) return;
+
+          const rawVal = parseFloat(msg.sig);
+          if (!isFinite(rawVal)) return;
+
+          const now = Date.now();
+          const point = { x: now, y: rawVal };
+
+          const freq = msg.freq;
+          if (freq !== undefined && freq !== null && freq !== "") {
+            const f = parseFloat(freq);
+            if (isFinite(f)) {
+              const fmt = f.toFixed(2);
+              if (hub.lastFreq !== fmt && (now - hub.lastLabelTime) > 3000) {
+                point.freqChange = fmt;
+                hub.lastFreq = fmt;
+                hub.lastLabelTime = now;
+              }
+            }
+          }
+
+          hub.data.push(point);
+          if (hub.data.length > 10000) hub.data.shift();
+
+          broadcast(hub);
+        });
+
+        hub.hasSocketListener = true;
+        hub.isConnected = true;
+      } catch {
+        setTimeout(attach, 1000);
+      }
+    };
+
+    attach();
+  }
+
+  function ensureUnitSubscription(hub) {
+    if (hub.unitSubscribed) return;
+    if (window.MetricsMonitor && typeof window.MetricsMonitor.onSignalUnitChange === "function") {
+      try {
+        window.MetricsMonitor.onSignalUnitChange((newUnit) => {
+          hub.unit = normalizeUnit(newUnit);
+          hub.instances.forEach((inst) => {
+            try { inst.onUnitChange(hub.unit); } catch {}
+          });
+          broadcast(hub, true);
+        });
+        hub.unitSubscribed = true;
+      } catch {}
+    }
+  }
+
+  function ensureGlobalListeners(hub) {
+    if (!hub.globalMouseInstalled) {
+      window.addEventListener("mousemove", (e) => {
+        if (!hub.draggingKey) return;
+        const inst = hub.instances.get(hub.draggingKey);
+        if (inst) inst.onGlobalMouseMove(e);
+      }, { passive: true });
+
+      window.addEventListener("mouseup", (e) => {
+        if (!hub.draggingKey) return;
+        const inst = hub.instances.get(hub.draggingKey);
+        hub.draggingKey = null;
+        if (inst) inst.onGlobalMouseUp(e);
+      }, { passive: true });
+
+      hub.globalMouseInstalled = true;
+    }
+
+    if (!hub.globalKeyInstalled) {
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Control") hub.ctrlPressed = true;
+        const inst = hub.activeKey ? hub.instances.get(hub.activeKey) : null;
+        if (inst) inst.onGlobalKeyDown(e, hub.ctrlPressed);
+      });
+
+      window.addEventListener("keyup", (e) => {
+        if (e.key === "Control") hub.ctrlPressed = false;
+        const inst = hub.activeKey ? hub.instances.get(hub.activeKey) : null;
+        if (inst) inst.onGlobalKeyUp(e, hub.ctrlPressed);
+      });
+
+      hub.globalKeyInstalled = true;
+    }
+  }
+
+  function broadcast(hub, force = false) {
+    const now = Date.now();
+    if (!force && (now - hub.lastBroadcastTs) < 80) { // ~12.5 fps broadcast
+      if (hub.broadcastQueued) return;
+      hub.broadcastQueued = true;
+      setTimeout(() => {
+        hub.broadcastQueued = false;
+        broadcast(hub, true);
+      }, 80);
+      return;
+    }
+    hub.lastBroadcastTs = now;
+
+    hub.instances.forEach((inst) => {
+      if (!inst || inst._destroyed) return;
+      inst.onData();
+    });
+  }
+
+  function createMpxBackgroundPlugin() {
+    return {
+      id: 'mmMpxCanvasBackground',
+      beforeDraw(chart) {
+        const { ctx, chartArea } = chart || {};
+        if (!ctx || !chartArea) return;
+
+        const { left, top, width, height } = chartArea;
+        if (!isFinite(left) || !isFinite(top) || !isFinite(width) || !isFinite(height)) return;
+
+        ctx.save();
+        const grd = ctx.createLinearGradient(0, top, 0, top + height);
+        grd.addColorStop(0, "#001225");
+        grd.addColorStop(1, "#002044");
+        ctx.fillStyle = grd;
+        ctx.fillRect(left, top, width, height);
+        ctx.restore();
+      }
+    };
+  }
+
+  function buildChartPlugins(inst) {
+    const freqLabelPlugin = {
+      id: 'mmSigFreqLabelRenderer',
+      afterDatasetsDraw(chart) {
+        if (!chart?.data?.datasets?.length) return;
+
+        let meta;
+        try { meta = chart.getDatasetMeta(0); } catch { return; }
+        if (!meta || !Array.isArray(meta.data) || meta.data.length === 0) return;
+
+        const { ctx, chartArea } = chart;
+        const dataset = chart.data.datasets[0];
+        if (!ctx || !chartArea || !dataset?.data?.length) return;
+
+        ctx.save();
+
+        meta.data.forEach((element, index) => {
+          const dp = dataset.data[index];
+          if (!dp || !dp.freqChange) return;
+
+          const mx = element?.x;
+          const my = element?.y;
+          if (!isFinite(mx) || !isFinite(my)) return;
+
+          if (mx < chartArea.left || mx > chartArea.right) return;
+
+          let yLineStart, yLineEnd;
+          if (my < chartArea.top + 20) {
+            yLineStart = Math.max(my + 2, chartArea.top);
+            yLineEnd = Math.max(my + 10, chartArea.top + 8);
+          } else {
+            yLineStart = my - 2;
+            yLineEnd = my - 10;
+          }
+
+          ctx.beginPath();
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+          ctx.lineWidth = 1;
+          ctx.moveTo(mx, yLineStart);
+          ctx.lineTo(mx, yLineEnd);
+          ctx.stroke();
+
+          ctx.font = "bold 12px Arial";
+          ctx.fillStyle = "#ffffff";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+
+          const yPos = (my < chartArea.top + 30)
+            ? Math.max(chartArea.top - 2, my - 5)
+            : (my - 12);
+
+          ctx.fillText(dp.freqChange, mx, yPos);
+        });
+
+        ctx.restore();
+      }
+    };
+
+    const unitLabelPlugin = {
+      id: 'mmSigUnitLabelRenderer',
+      afterDraw(chart) {
+        if (inst.hideValueAndUnit) return;
+        const { ctx, scales } = chart || {};
+        const yAxis = scales?.y;
+        if (!ctx || !yAxis) return;
+
+        ctx.save();
+        ctx.font = "11px Arial";
+        ctx.fillStyle = "#8feaff";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "top";
+
+        const yPos = yAxis.bottom + 6;
+        const xPos = yAxis.right - 4;
+
+        ctx.fillText(unitLabel(inst.unit), xPos, yPos);
+        ctx.restore();
+      }
+    };
+
+    const currentValuePlugin = {
+      id: 'mmSigCurrentValueRenderer',
+      afterDraw(chart) {
+        if (inst.hideValueAndUnit) return;
+        const dataset = chart?.data?.datasets?.[0];
+        if (!dataset?.data?.length) return;
+
+        const last = dataset.data[dataset.data.length - 1];
+        const rawY = last?.y;
+        if (!isFinite(rawY)) return;
+
+        const displayY = convertValue(rawY, inst.unit);
+        const text = displayY.toFixed(1);
+
+        const { ctx, scales } = chart || {};
+        const yAxis = scales?.y;
+        if (!ctx || !yAxis) return;
+
+        ctx.save();
+        ctx.font = "bold 12px Arial";
+        ctx.fillStyle = dataset.borderColor || "#8feaff";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "bottom";
+
+        const xPos = yAxis.right - 4;
+        const yPos = yAxis.top - 6;
+
+        ctx.fillText(text, xPos, yPos);
+        ctx.restore();
+      }
+    };
+
+    return [freqLabelPlugin, unitLabelPlugin, currentValuePlugin];
+  }
+
+  class SignalAnalyzerInstance {
+    constructor(hub, opts) {
+      this.hub = hub;
+      this.containerId = String(opts.containerId || "level-meter-container");
+      this.instanceKey = String(opts.instanceKey || this.containerId);
+      this.embedded = !!opts.embedded;
+
+      // Legacy CSS/IDs are only safe if used once.
+      this.useLegacyCss = !!opts.useLegacyCss && !opts.embedded && !hub.__legacyInUse;
+      if (this.useLegacyCss) hub.__legacyInUse = true;
+
+      this.hideValueAndUnit = (opts.hideValueAndUnit !== undefined)
+        ? !!opts.hideValueAndUnit
+        : (!!this.embedded && Array.isArray(CONFIG.CANVAS_SEQUENCE) && CONFIG.CANVAS_SEQUENCE.includes(4));
+
+      this.unit = hub.unit;
+
+      this.chart = null;
+      this.wrap = null;
+      this.canvas = null;
+
+      // Zoom state (RAW, always dBf)
+      this.yMin = Y_MIN_DEFAULT;
+      this.yMax = Y_MAX_DEFAULT;
+      this.duration = DURATION_DEFAULT;
+
+      // Drag state
+      this.isDragging = false;
+      this.hasDragged = false;
+      this.lastY = 0;
+
+      // Tooltip
+      this.tooltipEl = null;
+      this.ctrlWasPressed = false;
+
+      this._destroyed = false;
+
+      this._canvasWheelHandler = (e) => this.onWheel(e);
+      this._canvasMouseDownHandler = (e) => this.onMouseDown(e);
+      this._canvasContextHandler = (e) => this.onContextMenu(e);
+      this._canvasClickCapture = (e) => this.onClickCapture(e);
+
+      this.mount();
+    }
+
+    mount() {
+      const parent = document.getElementById(this.containerId);
+      if (!parent) return;
+
+      parent.innerHTML = "";
+
+      const wrap = document.createElement("div");
+      wrap.dataset.mmSignalAnalyzerWrap = "1";
+
+      const canvas = document.createElement("canvas");
+      canvas.dataset.mmSignalAnalyzerCanvas = "1";
+
+      if (this.useLegacyCss) {
+        wrap.id = "signalMetricsMonitorContainer";
+        canvas.id = "signalMetricsMonitor";
+      } else {
+        const suffix = this.instanceKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+        wrap.id = `signalMetricsMonitorContainer_${suffix}`;
+        canvas.id = `signalMetricsMonitor_${suffix}`;
+      }
+
+      if (this.embedded) {
+        wrap.style.cssText = "position: relative; width: 100%; height: 100%; overflow: hidden; touch-action: none;";
+        canvas.style.cssText = "display: block; width: 100%; height: 100%;";
+      } else {
+        wrap.style.cssText = "position: relative; width: 100%; height: 100%; overflow: hidden; touch-action: none;";
+        canvas.style.cssText =
+          "display: block; width: 100%; height: 100%; " +
+          "background: linear-gradient(to bottom, #001225 0%, #002044 100%);";
+      }
+
+      wrap.appendChild(canvas);
+      parent.appendChild(wrap);
+
+      this.wrap = wrap;
+      this.canvas = canvas;
+
+      canvas.addEventListener("mouseenter", () => { this.hub.activeKey = this.instanceKey; });
+      canvas.addEventListener("mouseleave", () => {
+        if (this.hub.activeKey === this.instanceKey) this.hub.activeKey = null;
+        this.hideTooltip();
+      });
+
+      canvas.addEventListener("wheel", this._canvasWheelHandler, { passive: false });
+      canvas.addEventListener("mousedown", this._canvasMouseDownHandler);
+      canvas.addEventListener("contextmenu", this._canvasContextHandler);
+      canvas.addEventListener("click", this._canvasClickCapture, true);
+
+      this.buildChart();
+      this.updateCursor();
+    }
+
+    buildChart() {
+      if (!this.canvas || this._destroyed) return;
+
+      if (typeof Chart === "undefined") {
+        console.error("[MetricsSignalAnalyzer] Chart.js is not loaded.");
+        return;
+      }
+
+      const ctx = this.canvas.getContext("2d");
+      if (!ctx) return;
+
+      if (this.chart) {
+        try { stopStreamingTimers(this.chart); } catch {}
+        try { this.chart.destroy(); } catch {}
+        this.chart = null;
+      }
+
+      const plugins = [createMpxBackgroundPlugin(), ...buildChartPlugins(this)];
+
+      this.chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [{
+            label: 'Signal',
+            data: this.hub.data,
+            parsing: { yAxisKey: 'y', xAxisKey: 'x' },
+
+            tension: 0.6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 0,
+
+            borderWidth: 1.0,
+            borderColor: '#8feaff',
+            backgroundColor: 'rgba(143, 234, 255, 0.08)',
+            fill: true,
+          }]
+        },
+        plugins,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          backgroundColor: 'transparent',
+          layout: { padding: { top: 25, right: 5, bottom: 5, left: 0 } },
+          interaction: { intersect: false, mode: 'nearest' },
+          scales: {
+            x: {
+              type: 'realtime',
+              realtime: {
+                duration: this.duration,
+                refresh: 100,
+                delay: 1000,
+
+                // IMPORTANT: start paused until data exists; prevents early plugin races.
+                pause: !this.hub.data || this.hub.data.length === 0,
+              },
+              grid: { display: true, color: 'rgba(255,255,255,0.12)', drawTicks: false },
+              ticks: { display: true, color: 'rgba(255,255,255,0.65)', maxRotation: 0, autoSkip: true, maxTicksLimit: 15, padding: 5 }
+            },
+            y: {
+              min: this.yMin,
+              max: this.yMax,
+              grace: 0,
+              grid: { color: 'rgba(255,255,255,0.12)', drawTicks: false },
+              ticks: {
+                color: 'rgba(255,255,255,0.65)',
+                font: { size: 10, family: "Arial" },
+                autoSkip: false,
+                includeBounds: false,
+                padding: 8,
+                callback: (value) => {
+                  const disp = convertValue(value, this.unit);
+                  const rounded = Math.round(disp);
+
+                  if (this.unit === 'dbuv') {
+                    if (rounded === -20) return null;
+                    if (rounded === -10) return null;
+                  }
+                  if (this.unit === 'dbf') {
+                    if (rounded === 0 || rounded === 100) return null;
+                  }
+                  if (this.unit === 'dbm') {
+                    if (rounded === -20) return null;
+                  }
+                  return rounded;
+                }
+              },
+              afterBuildTicks: (axis) => {
+                try {
+                  if (!axis) return;
+
+                  const minRaw = axis.min;
+                  const maxRaw = axis.max;
+
+                  const minDisp = convertValue(minRaw, this.unit);
+                  const maxDisp = convertValue(maxRaw, this.unit);
+                  const range = maxDisp - minDisp;
+
+                  let step;
+                  if (range <= 10) step = 1;
+                  else if (range <= 25) step = 5;
+                  else step = 10;
+
+                  let start = Math.ceil(minDisp / step) * step;
+                  if (start < minDisp) start += step;
+
+                  const newTicks = [];
+                  for (let v = start; v <= maxDisp + 0.0001; v += step) {
+                    const raw = (this.unit === "dbuv") ? (v + 10.875) :
+                                (this.unit === "dbm")  ? (v + 119.75) :
+                                v;
+                    newTicks.push({ value: raw });
+                  }
+                  axis.ticks = newTicks;
+                } catch {}
+              },
+              position: 'right'
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: true, mode: 'index', intersect: false }
+          }
+        }
+      });
+    }
+
+    onData() {
+      if (!this.chart || this._destroyed) return;
+
+      // Resume realtime once we have at least 1 point (no manual update calls here -> less race with streaming)
+      try {
+        const rt = this.chart.options?.scales?.x?.realtime;
+        if (rt && rt.pause && this.hub.data && this.hub.data.length > 0) {
+          rt.pause = false;
+        }
+      } catch {}
+    }
+
+    onUnitChange(newUnit) {
+      this.unit = normalizeUnit(newUnit);
+      if (!this.chart || this._destroyed) return;
+      safeUpdate(this.chart, 'none');
+      this.updateCursor();
+    }
+
+    isVerticallyZoomed() {
+      if (!this.chart) return false;
+      const y = this.chart.options?.scales?.y;
+      if (!y) return false;
+      return (Math.abs(y.min - Y_MIN_DEFAULT) > 0.5) || (Math.abs(y.max - Y_MAX_DEFAULT) > 0.5);
+    }
+
+    updateCursor() {
+      const c = this.canvas;
+      if (!c) return;
+      if (this.hub.ctrlPressed) c.style.cursor = "help";
+      else if (this.isDragging) c.style.cursor = "grabbing";
+      else if (this.isVerticallyZoomed()) c.style.cursor = "ns-resize";
+      else c.style.cursor = "pointer";
+    }
+
+    showTooltip() {
+      if (this.tooltipEl || !this.chart || this.isDragging) return;
+
+      const canvas = this.chart.canvas;
+      const parent = canvas?.parentElement;
+      if (!parent) return;
+
+      const el = document.createElement("div");
+      el.innerHTML = `
         <div style="margin-bottom: 8px; font-weight: bold;">Signal Chart Zoom Controls</div>
         <div style="margin-bottom: 4px;">• Scroll wheel  Horizontal zoom (time)</div>
         <div style="margin-bottom: 4px;">• Ctrl + Scroll wheel  Vertical zoom (level)</div>
@@ -140,688 +785,360 @@ window.onerror = function(message, source, lineno, colno, error) {
         <div style="margin-bottom: 4px;">• Ctrl + ← / →  Horizontal zoom in/out</div>
         <div style="margin-bottom: 4px;">• Ctrl + Space  Reset zoom</div>
       `;
-      
-      tooltipElement.style.cssText = `
-        position: absolute; background: linear-gradient(to bottom, rgba(0, 40, 70, 0.95), rgba(0, 25, 50, 0.95));
-        border: 1px solid rgba(143, 234, 255, 0.5); border-radius: 8px; padding: 12px 16px; color: #8feaff;
+      el.style.cssText = `
+        position:absolute; background: linear-gradient(to bottom, rgba(0, 40, 70, 0.95), rgba(0, 25, 50, 0.95));
+        border:1px solid rgba(143, 234, 255, 0.5); border-radius: 8px; padding: 12px 16px; color: #8feaff;
         font-family: Arial, sans-serif; font-size: 10px; line-height: 1.2; z-index: 10000; pointer-events: none;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 0.2s ease-in-out;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5); opacity: 0; transition: opacity 0.2s ease-in-out;
         max-width: 320px; white-space: nowrap;
       `;
-      
-      const parent = canvas.parentElement;
-      if (!parent) return;
+
       parent.style.position = "relative";
-      parent.appendChild(tooltipElement);
-      
-      const tooltipWidth = tooltipElement.offsetWidth;
-      const tooltipHeight = tooltipElement.offsetHeight;
-      const tooltipLeft = (canvas.width - tooltipWidth) / 2;
-      const tooltipTop = (canvas.height - tooltipHeight) / 2;
+      parent.appendChild(el);
 
-      tooltipElement.style.left = `${Math.max(5, tooltipLeft)}px`;
-      tooltipElement.style.top = `${Math.max(5, tooltipTop)}px`;
+      const tooltipWidth = el.offsetWidth;
+      const tooltipHeight = el.offsetHeight;
+      const left = (canvas.clientWidth - tooltipWidth) / 2;
+      const top = (canvas.clientHeight - tooltipHeight) / 2;
 
-      requestAnimationFrame(() => {
-        if (tooltipElement) tooltipElement.style.opacity = "1";
-      });
-  }
+      el.style.left = `${Math.max(5, left)}px`;
+      el.style.top = `${Math.max(5, top)}px`;
 
-  function hideTooltip() {
-    if (!tooltipElement) return;
-    tooltipElement.style.opacity = "0";
-    setTimeout(() => {
-      if (tooltipElement && tooltipElement.parentElement) {
-        tooltipElement.parentElement.removeChild(tooltipElement);
-      }
-      tooltipElement = null;
-    }, 200);
-  }
+      requestAnimationFrame(() => { el.style.opacity = "1"; });
 
-  /////////////////////////////////////////////////////////////////
-  // Data Handling
-  /////////////////////////////////////////////////////////////////
-  function updateSignal(value, freq) {
-    let rawVal = parseFloat(value);
-    if (isNaN(rawVal) || !isFinite(rawVal)) return;
-    
-    const now = Date.now();
-    const point = { x: now, y: rawVal };
-    
-    if (freq !== undefined && freq !== null && freq !== "") {
-      const currentFreqFormatted = parseFloat(freq).toFixed(2);
-      
-      if (lastFreq !== currentFreqFormatted) {
-        if (now - lastLabelTime > 3000) {
-          point.freqChange = currentFreqFormatted;
-          lastFreq = currentFreqFormatted;
-          lastLabelTime = now;
-        }
-      }
+      this.tooltipEl = el;
     }
 
-    storedSignalData.push(point);
-    
-    if (storedSignalData.length > 10000) storedSignalData.shift();
-
-    if (signalChart) {
-      signalChart.update('quiet');
-    }
-  }
-
-  async function connectToDataStream() {
-    if (isSocketConnected) return;
-    try {
-      if (window.socketPromise) {
-        socket = await window.socketPromise;
-        if (socket) {
-          socket.addEventListener("message", (evt) => {
-            try {
-              const msg = JSON.parse(evt.data);
-              if (msg && msg.sig !== undefined) updateSignal(msg.sig, msg.freq);
-            } catch {}
-          });
-          isSocketConnected = true;
-        }
-      } else {
-        setTimeout(connectToDataStream, 1000);
-      }
-    } catch {}
-  }
-  
-  /////////////////////////////////////////////////////////////////
-  // Unit Change Handler
-  /////////////////////////////////////////////////////////////////
-  function handleUnitChange(newUnit) {
-      if (!newUnit || newUnit === currentUnit) return;
-      
-      const oldUnit = currentUnit;
-      currentUnit = newUnit.toLowerCase();
-      
-      // Save current view state relative to OLD unit
-      if (signalChart) {
-         currentZoomState.yMin = convertValue(signalChart.options.scales.y.min, oldUnit);
-         currentZoomState.yMax = convertValue(signalChart.options.scales.y.max, oldUnit);
-         currentZoomState.duration = signalChart.options.scales.x.realtime.duration;
-      }
-
-      // Convert stored limits from OLD to NEW unit to keep view consistent
-      // Note: currentZoomState stores DISPLAY values now for easier logic
-      const minBase = convertValueInverse(currentZoomState.yMin, oldUnit);
-      const maxBase = convertValueInverse(currentZoomState.yMax, oldUnit);
-      
-      currentZoomState.yMin = convertValue(minBase, currentUnit);
-      currentZoomState.yMax = convertValue(maxBase, currentUnit);
-      currentZoomState.lastUnit = currentUnit;
-
-      // Re-init to rebuild scales cleanly
-      init();
-  }
-
-  /////////////////////////////////////////////////////////////////
-  // Public API / Initialization
-  /////////////////////////////////////////////////////////////////
-  function init(containerId = "level-meter-container") {
-    const parent = document.getElementById(containerId);
-    if (!parent) return;
-
-    if (signalChart) signalChart.destroy();
-    signalChart = null;
-    
-    parent.innerHTML = "";
-
-    // --- STATE RESTORATION ---
-    // If first run, set defaults based on DEFAULT BASE (dBf) converted to current unit
-    // This ensures that if we start in dBm, we start with -120 to -20 range, not 0-100.
-    if (storedSignalData.length === 0) {
-        lastFreq = null;
-        lastLabelTime = 0;
-        
-        currentZoomState.yMin = convertValue(Y_MIN_DEFAULT_BASE, currentUnit);
-        currentZoomState.yMax = convertValue(Y_MAX_DEFAULT_BASE, currentUnit);
-        currentZoomState.duration = DURATION_DEFAULT;
-        currentZoomState.lastUnit = currentUnit; // Sync immediately
+    hideTooltip() {
+      const el = this.tooltipEl;
+      if (!el) return;
+      el.style.opacity = "0";
+      setTimeout(() => {
+        if (el.parentElement) el.parentElement.removeChild(el);
+      }, 200);
+      this.tooltipEl = null;
     }
 
-    tooltipElement = null;
-    ctrlKeyPressed = false;
-    ctrlKeyWasPressed = false;
-
-    // Detect Initial Unit
-    if (window.MetricsMonitor && typeof window.MetricsMonitor.getSignalUnit === "function") {
-        let u = window.MetricsMonitor.getSignalUnit();
-        if (u) {
-             const newU = u.toLowerCase();
-             // If unit changed during reload/init detection
-             if (newU !== currentUnit) {
-                 // Convert existing defaults to new unit
-                 const minBase = convertValueInverse(currentZoomState.yMin, currentUnit);
-                 const maxBase = convertValueInverse(currentZoomState.yMax, currentUnit);
-                 currentUnit = newU;
-                 currentZoomState.yMin = convertValue(minBase, currentUnit);
-                 currentZoomState.yMax = convertValue(maxBase, currentUnit);
-             }
-        }
-    }
-    
-    // Ensure state tracks current unit
-    currentZoomState.lastUnit = currentUnit;
-
-    // Subscribe to Unit Changes
-    if (window.MetricsMonitor && typeof window.MetricsMonitor.onSignalUnitChange === "function") {
-        window.MetricsMonitor.onSignalUnitChange(handleUnitChange);
+    storeZoomState() {
+      if (!this.chart) return;
+      const s = this.chart.options?.scales;
+      if (!s?.y || !s?.x?.realtime) return;
+      this.yMin = s.y.min;
+      this.yMax = s.y.max;
+      this.duration = s.x.realtime.duration;
     }
 
-    const wrap = document.createElement("div");
-    wrap.id = "signalCanvasContainer";
-    wrap.style.cssText = "position: relative; width: 100%; height: 100%; overflow: hidden; touch-action: none;";
-    
-    const canvas = document.createElement("canvas");
-    canvas.id = "signalCanvas";
-    canvas.style.cssText = "display: block; width: 100%; height: 100%; background: linear-gradient(to bottom, #001225 0%, #002044 100%);";
-    
-    wrap.appendChild(canvas);
-    parent.appendChild(wrap);
+    zoomReset() {
+      if (!this.chart) return;
+      const s = this.chart.options?.scales;
+      if (!s?.y || !s?.x?.realtime) return;
 
-    const ctx = canvas.getContext("2d");
+      s.y.min = Y_MIN_DEFAULT;
+      s.y.max = Y_MAX_DEFAULT;
+      s.x.realtime.duration = DURATION_DEFAULT;
 
-    if (typeof Chart === 'undefined') return console.error("Chart.js is not loaded.");
-    
-    // --- Plugins ---
-    const freqLabelPlugin = {
-      id: 'freqLabelRenderer',
-      afterDatasetsDraw(chart) {
-        if (!chart || !chart.data || !chart.data.datasets || !chart.data.datasets.length) return;
-        const meta = chart.getDatasetMeta(0);
-        if (!meta) return;
-        const { ctx, chartArea } = chart;
-        const dataset = chart.data.datasets[0];
-        
-        ctx.save();
-        ctx.beginPath();
-        
-        meta.data.forEach((element, index) => {
-          const dataPoint = dataset.data[index];
-          if (dataPoint && dataPoint.freqChange) {
-             const model = element;
-             if (!model || model.x < chartArea.left || model.x > chartArea.right) return;
+      safeUpdate(this.chart, 'none');
+      this.storeZoomState();
+      this.updateCursor();
+    }
 
-             let yLineStart, yLineEnd;
-             if (model.y < chartArea.top + 20) { 
-                yLineStart = Math.max(model.y + 2, chartArea.top); 
-                yLineEnd = Math.max(model.y + 10, chartArea.top + 8);
-             } else { 
-                yLineStart = model.y - 2;
-                yLineEnd = model.y - 10;
-             }
-             
-             ctx.beginPath();
-             ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-             ctx.lineWidth = 1;
-             ctx.moveTo(model.x, yLineStart);
-             ctx.lineTo(model.x, yLineEnd);
-             ctx.stroke();
-
-             ctx.font = "bold 12px Arial";
-             ctx.fillStyle = "#ffffff"; 
-             ctx.textAlign = "center";
-
-             let yPos, textBaseline;
-             if (model.y < chartArea.top + 30) { 
-                 textBaseline = "bottom";
-                 yPos = Math.max(chartArea.top - 2, model.y - 5);
-             } else { 
-                 textBaseline = "bottom";
-                 yPos = model.y - 12;
-             }
-             
-             ctx.textBaseline = textBaseline;
-             ctx.fillText(dataPoint.freqChange, model.x, yPos);
-          }
-        });
-        ctx.restore();
-      }
-    };
-
-    const unitLabelPlugin = {
-      id: 'unitLabelRenderer',
-      afterDraw(chart) {
-        const { ctx, scales } = chart;
-        const yAxis = scales.y;
-        ctx.save();
-        ctx.font = "11px Arial";
-        ctx.fillStyle = "rgba(255, 255, 255, 0.6)"; 
-        ctx.textAlign = "right";
-        ctx.textBaseline = "top";
-        const yPos = yAxis.bottom + 6; 
-        
-        let xPos;
-        if (currentUnit === 'dbuv' || currentUnit === 'dBµV') {
-            xPos = yAxis.right + 2; 
-        } else {
-            xPos = yAxis.right - 4; 
-        }
-
-        const config = UNIT_CONFIG[currentUnit];
-        if (config && config.label) {
-            ctx.fillText(config.label, xPos, yPos);
-        }
-        ctx.restore();
-      }
-    };
-
-    const currentValuePlugin = {
-        id: 'currentValueRenderer',
-        afterDatasetsDraw(chart) {
-            if (!chart || !chart.data || !chart.data.datasets || !chart.data.datasets.length) return;
-            const meta = chart.getDatasetMeta(0);
-            if (!meta || !meta.data || !meta.data.length) return;
-            const { ctx, chartArea } = chart;
-            const dataset = chart.data.datasets[0];
-            
-            const lastDataPoint = dataset.data[dataset.data.length - 1];
-            const lastElement = meta.data[meta.data.length - 1];
-            
-            if (!lastDataPoint || !lastElement) return;
-            const { x, y } = lastElement;
-
-            if (x < chartArea.left || x > chartArea.right || y < chartArea.top || y > chartArea.bottom) return;
-            
-            const rawY = lastDataPoint.y;
-            const displayY = convertValue(rawY, currentUnit);
-
-            const text = displayY.toFixed(1);
-
-            ctx.save();
-            ctx.font = "bold 11px Arial";
-            ctx.fillStyle = dataset.borderColor; 
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            ctx.fillText(text, x, y + 6);
-            ctx.restore();
-        }
-    };
-    
-    // Use stored ZOOM state directly as min/max.
-    // However, Chart.js expects RAW scale values (if using parsing).
-    // BUT we are using a custom tick generator (afterBuildTicks) which essentially maps
-    // raw values to display grids.
-    // 
-    // To make zooming work properly in dBm:
-    // We should treat the scale values as RAW (dBf) values internally.
-    // 1. Min/Max passed to scale are dBf.
-    // 2. Zoom handlers calculate new Min/Max in dBf.
-    // 3. Ticks are drawn by converting grid to dBf.
-    //
-    // The previous issue was likely that we were mixing units in the zoom state.
-    
-    // FIX: Convert ViewState (Display Units) -> Chart Config (Raw Units)
-    const chartMin = convertValueInverse(currentZoomState.yMin, currentUnit);
-    const chartMax = convertValueInverse(currentZoomState.yMax, currentUnit);
-
-    signalChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [ {
-            label: 'Signal', 
-            data: storedSignalData, 
-            parsing: {
-                yAxisKey: 'y', // Always read raw dBf
-                xAxisKey: 'x'
-            },
-            borderWidth: 1, 
-            pointRadius: 0, 
-            tension: 0.15, 
-            borderColor: '#8feaff',
-            backgroundColor: 'rgba(143, 234, 255, 0.1)', 
-            fill: true, 
-            pointHoverRadius: 0, 
-            pointHitRadius: 0,
-        } ],
-      },
-      plugins: [freqLabelPlugin, unitLabelPlugin, currentValuePlugin], 
-      options: {
-        responsive: true, 
-        maintainAspectRatio: false, 
-        animation: false,
-        layout: { padding: { top: 25, right: 5, bottom: 5, left: 0 } }, 
-        interaction: { intersect: false, mode: 'nearest', },
-        scales: {
-          x: {
-            type: 'realtime', 
-            realtime: { 
-                duration: currentZoomState.duration, 
-                refresh: 100, 
-                delay: 1000, 
-                pause: false, 
-            },
-            grid: { display: true, color: 'rgba(255,255,255,0.05)', drawTicks: false },
-            ticks: { display: true, color: 'rgba(255,255,255,0.5)', maxRotation: 0, autoSkip: true, maxTicksLimit: 15, padding: 5 },
-          },
-          y: {
-            min: chartMin, 
-            max: chartMax, 
-            grace: 0,
-            grid: { color: 'rgba(255,255,255,0.08)', drawTicks: false },
-            ticks: {
-              color: 'rgba(255,255,255,0.5)', font: { size: 11, family: "Arial" },
-              autoSkip: false, includeBounds: false, padding: 8, 
-              callback: function(value) {
-                const displayVal = convertValue(value, currentUnit);
-                const roundedVal = Math.round(displayVal);
-                
-                // --- CUSTOM HIDING RULES ---
-                if (currentUnit === 'dbuv' || currentUnit === 'dBµV') {
-                    if (roundedVal === -20) return null;
-                    if (roundedVal === -10) return null; // Hide -10 also
-                }
-                
-                if (currentUnit === 'dbf') {
-                    if (roundedVal === 0 || roundedVal === 100) return null;
-                }
-                
-                return roundedVal;
-              }
-            },
-            afterBuildTicks: function(axis) {
-                const minRaw = axis.min;
-                const maxRaw = axis.max;
-                
-                // Convert current VIEW PORT to display units
-                const minDisp = convertValue(minRaw, currentUnit);
-                const maxDisp = convertValue(maxRaw, currentUnit);
-                const range = maxDisp - minDisp;
-                
-                let step;
-                if (range <= 10) step = 1;
-                else if (range <= 25) step = 5;
-                else step = 10;
-                
-                // Calculate Alignment
-                let start = Math.ceil(minDisp / step) * step;
-                if (start < minDisp) start += step;
-                
-                const newTicks = [];
-                for (let v = start; v <= maxDisp + 0.0001; v += step) {
-                    // Convert display grid value back to raw Y value for positioning
-                    const rawVal = convertValueInverse(v, currentUnit);
-                    newTicks.push({ value: rawVal });
-                }
-                axis.ticks = newTicks;
-            },
-            position: 'right'
-          },
-        },
-        plugins: { legend: { display: false }, tooltip: { enabled: true, mode: 'index', intersect: false }, },
-      },
-    });
-
-    setupCustomZoomHandlers(canvas);
-    setupKeyboardControls(canvas);
-    
-    connectToDataStream();
-    updateCursorStyle(canvas);
-  }
-
-  /////////////////////////////////////////////////////////////////
-  // CUSTOM ZOOM, PAN & KEYBOARD HANDLERS
-  /////////////////////////////////////////////////////////////////
-  function updateStoredZoomState() {
-      if (!signalChart) return;
-      const scales = signalChart.options.scales;
-      
-      // Store state in DISPLAY units (user readable)
-      currentZoomState.yMin = convertValue(scales.y.min, currentUnit);
-      currentZoomState.yMax = convertValue(scales.y.max, currentUnit);
-      currentZoomState.duration = scales.x.realtime.duration;
-  }
-
-  function setupKeyboardControls(canvas) {
-    const H_ZOOM_FACTOR = 1.2;
-    const V_ZOOM_FACTOR = 1.2;
-
-    window.addEventListener("keydown", (e) => {
-        if (!signalChart || (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) return;
-        
-        if (e.key === "Control" && !ctrlKeyWasPressed) {
-          ctrlKeyPressed = true;
-          ctrlKeyWasPressed = true;
-          if (!isDragging) {
-            showTooltip();
-            updateCursorStyle(canvas);
-          }
-        }
-        
-        if (!e.ctrlKey) return;
-
-        let handled = false;
-        const scales = signalChart.options.scales;
-
-        switch (e.key) {
-            case 'ArrowLeft': {
-              const realtimeOpts = scales.x.realtime;
-              let newDuration = realtimeOpts.duration / H_ZOOM_FACTOR;
-              if (newDuration < 1000) newDuration = 1000;
-              realtimeOpts.duration = newDuration;
-              handled = true;
-              break;
-            }
-            case 'ArrowRight': {
-              const realtimeOpts = scales.x.realtime;
-              let newDuration = realtimeOpts.duration * H_ZOOM_FACTOR;
-              if (newDuration > 120000) newDuration = 120000;
-              realtimeOpts.duration = newDuration;
-              handled = true;
-              break;
-            }
-            case 'ArrowUp': {
-                const currentRange = scales.y.max - scales.y.min;
-                let newRange = currentRange / V_ZOOM_FACTOR;
-                if (newRange < 5) newRange = 5;
-                const center = (scales.y.max + scales.y.min) / 2;
-                scales.y.min = center - newRange / 2;
-                scales.y.max = center + newRange / 2;
-                handled = true;
-                break;
-            }
-            case 'ArrowDown': {
-                // Calculate limits based on CURRENT UNIT
-                const minLimitRaw = convertValueInverse(convertValue(Y_MIN_DEFAULT_BASE, currentUnit), currentUnit);
-                const maxLimitRaw = convertValueInverse(convertValue(Y_MAX_DEFAULT_BASE, currentUnit), currentUnit);
-                // Note: The above is effectively just converting back and forth, 
-                // but conceptually we want limits that match 0-100 dBf.
-                const ABS_MIN_DBF = 0;
-                const ABS_MAX_DBF = 100;
-                
-                const currentRange = scales.y.max - scales.y.min;
-                let newRange = currentRange * V_ZOOM_FACTOR;
-                if (newRange > (ABS_MAX_DBF - ABS_MIN_DBF)) newRange = ABS_MAX_DBF - ABS_MIN_DBF;
-                
-                const center = (scales.y.max + scales.y.min) / 2;
-                let newMin = center - newRange / 2;
-                let newMax = center + newRange / 2;
-                
-                if (newMin < ABS_MIN_DBF) {
-                    newMin = ABS_MIN_DBF; newMax = newMin + newRange;
-                }
-                if (newMax > ABS_MAX_DBF) {
-                    newMax = ABS_MAX_DBF; newMin = newMax - (newMax - newMin);
-                }
-                scales.y.min = newMin;
-                scales.y.max = newMax;
-                handled = true;
-                break;
-            }
-            case ' ':
-                zoomReset();
-                handled = true;
-                break;
-        }
-
-        if (handled) {
-            e.preventDefault();
-            e.stopPropagation();
-            hideTooltip();
-            signalChart.update('none');
-            updateStoredZoomState();
-            updateCursorStyle(canvas);
-        }
-    });
-
-    window.addEventListener("keyup", (e) => {
-        if (e.key === "Control") {
-          ctrlKeyPressed = false;
-          ctrlKeyWasPressed = false;
-          hideTooltip();
-          updateCursorStyle(canvas);
-        }
-    });
-  }
-
-  function setupCustomZoomHandlers(canvas) {
-    canvas.addEventListener("wheel", (e) => {
-      if (!signalChart) return;
+    onWheel(e) {
+      if (!this.chart) return;
       e.preventDefault();
-      hideTooltip();
-      const scales = signalChart.options.scales;
-      const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1; 
+      this.hideTooltip();
+
+      const s = this.chart.options.scales;
+      const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1;
 
       if (e.ctrlKey) {
-        // Limits: Always respect 0 to 100 dBf range internally
-        const ABS_MIN_DBF = 0;
-        const ABS_MAX_DBF = 100;
+        const curRange = s.y.max - s.y.min;
+        let newRange = curRange * zoomFactor;
 
-        const currentRange = scales.y.max - scales.y.min;
-        let newRange = currentRange * zoomFactor;
-        
-        if (newRange > (ABS_MAX_DBF - ABS_MIN_DBF)) newRange = ABS_MAX_DBF - ABS_MIN_DBF;
+        if (newRange > (Y_MAX_DEFAULT - Y_MIN_DEFAULT)) newRange = (Y_MAX_DEFAULT - Y_MIN_DEFAULT);
         if (newRange < 5) newRange = 5;
-        
-        const center = (scales.y.max + scales.y.min) / 2;
-        let newMin = center - (newRange / 2);
-        let newMax = center + (newRange / 2);
-        
-        if (newMin < ABS_MIN_DBF) {
-            newMin = ABS_MIN_DBF; newMax = newMin + newRange;
-        }
-        if (newMax > ABS_MAX_DBF) {
-            newMax = ABS_MAX_DBF; newMin = newMax - newRange;
-        }
-        scales.y.min = newMin;
-        scales.y.max = newMax;
+
+        const center = (s.y.max + s.y.min) / 2;
+        let newMin = center - newRange / 2;
+        let newMax = center + newRange / 2;
+
+        if (newMin < Y_MIN_DEFAULT) { newMin = Y_MIN_DEFAULT; newMax = newMin + newRange; }
+        if (newMax > Y_MAX_DEFAULT) { newMax = Y_MAX_DEFAULT; newMin = newMax - newRange; }
+
+        s.y.min = newMin;
+        s.y.max = newMax;
       } else {
-        const realtimeOpts = scales.x.realtime;
-        let newDuration = realtimeOpts.duration * zoomFactor;
-        
+        const rt = s.x.realtime;
+        let newDuration = rt.duration * zoomFactor;
         if (newDuration < 1000) newDuration = 1000;
         if (newDuration > 120000) newDuration = 120000;
-        realtimeOpts.duration = newDuration;
+        rt.duration = newDuration;
       }
-      signalChart.update('none'); 
-      updateStoredZoomState();
-      updateCursorStyle(canvas);
-    });
 
-    canvas.addEventListener("mousedown", (e) => {
-      // Logic relies on checking against defaults
-      const yAxis = signalChart.options.scales.y;
-      
-      // Calculate defaults in RAW units
-      const defMin = convertValueInverse(convertValue(Y_MIN_DEFAULT_BASE, currentUnit), currentUnit);
-      const defMax = convertValueInverse(convertValue(Y_MAX_DEFAULT_BASE, currentUnit), currentUnit);
-      // Effectively 0 and 100
-      
-      const isVerticallyZoomed = Math.abs(yAxis.min - defMin) > 0.5 || Math.abs(yAxis.max - defMax) > 0.5;
-      
-      if (!isVerticallyZoomed || e.button !== 0) return;
-      
-      hideTooltip();
-      isDragging = true;
-      hasDragged = false; 
-      lastY = e.clientY;
-      updateCursorStyle(canvas);
-    });
+      safeUpdate(this.chart, 'none');
+      this.storeZoomState();
+      this.updateCursor();
+    }
 
-    window.addEventListener("mousemove", (e) => {
-      if (!isDragging || !signalChart) return;
-      const deltaY = e.clientY - lastY;
-      
-      if (Math.abs(deltaY) > 2) hasDragged = true; 
-      if (!hasDragged) return;
-      
-      lastY = e.clientY;
-      
-      const scales = signalChart.options.scales;
-      const range = scales.y.max - scales.y.min;
-      const chartAreaHeight = signalChart.chartArea.bottom - signalChart.chartArea.top;
-      
-      if (chartAreaHeight <= 0) return;
-      
-      const valueDelta = (deltaY / chartAreaHeight) * range;
-      
-      let newMin = scales.y.min + valueDelta;
-      let newMax = scales.y.max + valueDelta;
-      
-      const currentZoomRange = newMax - newMin;
-      const ABS_MIN_DBF = 0;
-      const ABS_MAX_DBF = 100;
-      
-      if (newMin < ABS_MIN_DBF) {
-          newMin = ABS_MIN_DBF; newMax = newMin + currentZoomRange;
-      }
-      if (newMax > ABS_MAX_DBF) {
-          newMax = ABS_MAX_DBF; newMin = newMax - currentZoomRange;
-      }
-      
-      scales.y.min = newMin;
-      scales.y.max = newMax;
-      signalChart.update('none');
-      updateStoredZoomState();
-    });
+    onMouseDown(e) {
+      if (!this.chart) return;
 
-    window.addEventListener("mouseup", (e) => {
-      if (isDragging) {
-        isDragging = false;
-        updateCursorStyle(canvas);
-        if (hasDragged) e.stopPropagation();
+      const y = this.chart.options.scales.y;
+      const vertZoomed = (Math.abs(y.min - Y_MIN_DEFAULT) > 0.5) || (Math.abs(y.max - Y_MAX_DEFAULT) > 0.5);
+
+      if (!vertZoomed || e.button !== 0) return;
+
+      this.hideTooltip();
+      this.isDragging = true;
+      this.hasDragged = false;
+      this.lastY = e.clientY;
+
+      this.hub.draggingKey = this.instanceKey;
+      this.updateCursor();
+    }
+
+    onGlobalMouseMove(e) {
+      if (!this.isDragging || !this.chart) return;
+
+      const deltaY = e.clientY - this.lastY;
+      if (Math.abs(deltaY) > 2) this.hasDragged = true;
+      if (!this.hasDragged) return;
+
+      this.lastY = e.clientY;
+
+      const s = this.chart.options.scales;
+      const range = s.y.max - s.y.min;
+      const h = this.chart.chartArea.bottom - this.chart.chartArea.top;
+      if (h <= 0) return;
+
+      const valueDelta = (deltaY / h) * range;
+
+      let newMin = s.y.min + valueDelta;
+      let newMax = s.y.max + valueDelta;
+
+      const zoomRange = newMax - newMin;
+
+      if (newMin < Y_MIN_DEFAULT) { newMin = Y_MIN_DEFAULT; newMax = newMin + zoomRange; }
+      if (newMax > Y_MAX_DEFAULT) { newMax = Y_MAX_DEFAULT; newMin = newMax - zoomRange; }
+
+      s.y.min = newMin;
+      s.y.max = newMax;
+
+      safeUpdate(this.chart, 'none');
+      this.storeZoomState();
+    }
+
+    onGlobalMouseUp(e) {
+      if (!this.isDragging) return;
+      this.isDragging = false;
+      this.updateCursor();
+      if (this.hasDragged) {
+        try { e.stopPropagation(); } catch {}
       }
-    });
-    
-    canvas.addEventListener("click", (e) => {
-        if (hasDragged) {
-            e.stopPropagation();
-            hasDragged = false;
-        }
-    }, true); 
-    
-    canvas.addEventListener("contextmenu", (e) => {
+    }
+
+    onClickCapture(e) {
+      if (this.hasDragged) {
+        try { e.stopPropagation(); e.preventDefault(); } catch {}
+        this.hasDragged = false;
+      }
+    }
+
+    onContextMenu(e) {
       e.preventDefault();
-      hideTooltip();
-      zoomReset();
-    });
+      this.hideTooltip();
+      this.zoomReset();
+    }
+
+    onGlobalKeyDown(e) {
+      if (!this.chart) return;
+
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if (e.key === "Control" && !this.ctrlWasPressed) {
+        this.ctrlWasPressed = true;
+        if (!this.isDragging) this.showTooltip();
+        this.updateCursor();
+      }
+
+      if (!e.ctrlKey) return;
+
+      const H_ZOOM_FACTOR = 1.2;
+      const V_ZOOM_FACTOR = 1.2;
+
+      let handled = false;
+      const s = this.chart.options.scales;
+
+      switch (e.key) {
+        case 'ArrowLeft': {
+          const rt = s.x.realtime;
+          let d = rt.duration / H_ZOOM_FACTOR;
+          if (d < 1000) d = 1000;
+          rt.duration = d;
+          handled = true;
+          break;
+        }
+        case 'ArrowRight': {
+          const rt = s.x.realtime;
+          let d = rt.duration * H_ZOOM_FACTOR;
+          if (d > 120000) d = 120000;
+          rt.duration = d;
+          handled = true;
+          break;
+        }
+        case 'ArrowUp': {
+          const curRange = s.y.max - s.y.min;
+          let newRange = curRange / V_ZOOM_FACTOR;
+          if (newRange < 5) newRange = 5;
+
+          const center = (s.y.max + s.y.min) / 2;
+          s.y.min = center - newRange / 2;
+          s.y.max = center + newRange / 2;
+          handled = true;
+          break;
+        }
+        case 'ArrowDown': {
+          const curRange = s.y.max - s.y.min;
+          let newRange = curRange * V_ZOOM_FACTOR;
+          if (newRange > (Y_MAX_DEFAULT - Y_MIN_DEFAULT)) newRange = (Y_MAX_DEFAULT - Y_MIN_DEFAULT);
+
+          const center = (s.y.max + s.y.min) / 2;
+          let newMin = center - newRange / 2;
+          let newMax = center + newRange / 2;
+
+          if (newMin < Y_MIN_DEFAULT) { newMin = Y_MIN_DEFAULT; newMax = newMin + newRange; }
+          if (newMax > Y_MAX_DEFAULT) { newMax = Y_MAX_DEFAULT; newMin = newMax - newRange; }
+
+          s.y.min = newMin;
+          s.y.max = newMax;
+          handled = true;
+          break;
+        }
+        case ' ':
+          this.zoomReset();
+          handled = true;
+          break;
+      }
+
+      if (handled) {
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+        this.hideTooltip();
+        safeUpdate(this.chart, 'none');
+        this.storeZoomState();
+        this.updateCursor();
+      }
+    }
+
+    onGlobalKeyUp(e) {
+      if (e.key === "Control") {
+        this.ctrlWasPressed = false;
+        this.hideTooltip();
+        this.updateCursor();
+      }
+    }
+
+    resize() {
+      if (!this.chart || this._destroyed) return;
+      try { this.chart.resize(); } catch {}
+    }
+
+    redraw(force) {
+      if (!this.chart || this._destroyed) return;
+      safeUpdate(this.chart, force ? 'none' : 'quiet');
+    }
+
+    destroy() {
+      if (this._destroyed) return;
+      this._destroyed = true;
+
+      if (this.canvas) {
+        this.canvas.removeEventListener("wheel", this._canvasWheelHandler);
+        this.canvas.removeEventListener("mousedown", this._canvasMouseDownHandler);
+        this.canvas.removeEventListener("contextmenu", this._canvasContextHandler);
+        this.canvas.removeEventListener("click", this._canvasClickCapture, true);
+      }
+
+      this.hideTooltip();
+
+      // Stop streaming timers BEFORE destroy (critical)
+      try { stopStreamingTimers(this.chart); } catch {}
+
+      if (this.chart) {
+        try { this.chart.destroy(); } catch {}
+        this.chart = null;
+      }
+
+      if (this.useLegacyCss) this.hub.__legacyInUse = false;
+
+      try { this.hub.instances.delete(this.instanceKey); } catch {}
+
+      try {
+        if (this.wrap && this.wrap.parentElement) this.wrap.parentElement.removeChild(this.wrap);
+      } catch {}
+
+      this.wrap = null;
+      this.canvas = null;
+      this.isDragging = false;
+    }
   }
 
-  function zoomReset() {
-    if (signalChart) {
-      // Reset to 0-100 dBf (Raw)
-      // This works for ALL units because the tick callback handles conversion
-      const ABS_MIN_DBF = 0;
-      const ABS_MAX_DBF = 100;
-      
-      signalChart.options.scales.y.min = ABS_MIN_DBF;
-      signalChart.options.scales.y.max = ABS_MAX_DBF;
-      signalChart.options.scales.x.realtime.duration = DURATION_DEFAULT;
-      
-      signalChart.update();
-      updateStoredZoomState(); 
-      updateCursorStyle(signalChart.canvas);
+  function createInstance(opts) {
+    const hub = ensureHub();
+    const o = opts || {};
+    const instanceKey = String(o.instanceKey || o.containerId || "level-meter-container");
+
+    const existing = hub.instances.get(instanceKey);
+    if (existing) {
+      try { existing.destroy(); } catch {}
+      hub.instances.delete(instanceKey);
     }
+
+    const inst = new SignalAnalyzerInstance(hub, {
+      containerId: o.containerId || "level-meter-container",
+      instanceKey,
+      embedded: !!o.embedded,
+      useLegacyCss: o.useLegacyCss !== undefined ? !!o.useLegacyCss : !o.embedded,
+      hideValueAndUnit: o.hideValueAndUnit
+    });
+
+    hub.instances.set(instanceKey, inst);
+    return inst;
+  }
+
+  function init(containerId = "level-meter-container") {
+    const useLegacyCss = (containerId === "level-meter-container");
+    return createInstance({ containerId, instanceKey: containerId, embedded: false, useLegacyCss });
+  }
+
+  function zoomReset(instanceKey) {
+    const hub = ensureHub();
+    if (instanceKey) {
+      const inst = hub.instances.get(String(instanceKey));
+      inst?.zoomReset?.();
+      return;
+    }
+    const inst = hub.activeKey ? hub.instances.get(hub.activeKey) : null;
+    (inst || hub.instances.values().next().value)?.zoomReset?.();
+  }
+
+  function resize(instanceKey) {
+    const hub = ensureHub();
+    if (instanceKey) return hub.instances.get(String(instanceKey))?.resize?.();
+    hub.instances.forEach((inst) => inst.resize());
+  }
+
+  function redraw(force, instanceKey) {
+    const hub = ensureHub();
+    if (instanceKey) return hub.instances.get(String(instanceKey))?.redraw?.(force);
+    hub.instances.forEach((inst) => inst.redraw(force));
   }
 
   window.MetricsSignalAnalyzer = {
     init,
-    updateSignal,
+    createInstance,
     zoomReset,
+    resize,
+    redraw,
   };
 
 })();
