@@ -327,11 +327,20 @@ function syncTextWebSocketMode(isInitial) {
 }
 
 // ---------------------------------------------------------
+// Cleanup current mode
+// ---------------------------------------------------------
+function cleanupCurrentMode() {
+    if (mode === 1 && window.MetricsMeters?.cleanup) window.MetricsMeters.cleanup();
+    if (mode === 2 && window.MetricsAnalyzer?.cleanup) window.MetricsAnalyzer.cleanup();
+}
+
+// ---------------------------------------------------------
 // Switching & Panel logic
 // ---------------------------------------------------------
 function switchModeWithFade(nextMode) {
   const meters = document.getElementById("level-meter-container");
   if (!meters) {
+    cleanupCurrentMode();
     mode = nextMode;
     buildMeters();
     syncTextWebSocketMode(false);
@@ -347,6 +356,7 @@ function switchModeWithFade(nextMode) {
   meters.style.opacity = "0";
 
   setTimeout(() => {
+    cleanupCurrentMode();
     mode = nextMode;
     buildMeters();
     syncTextWebSocketMode(false);

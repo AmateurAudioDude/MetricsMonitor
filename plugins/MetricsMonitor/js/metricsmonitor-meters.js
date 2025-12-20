@@ -916,20 +916,28 @@ function updateMeter(meterId, level) {
   // ---------------------------------------------------------------
   // WebSocket
   // ---------------------------------------------------------------
+  let metricsSocket = null;
+
   function setupMetricsWebSocket() {
+    // Don't create a new WebSocket if one already exists
+    if (metricsSocket && (metricsSocket.readyState === WebSocket.OPEN || metricsSocket.readyState === WebSocket.CONNECTING)) {
+      console.log("[MetricsMeters] WebSocket already exists, skipping creation");
+      return;
+    }
+
     const currentURL    = window.location;
     const webserverPort = currentURL.port || (currentURL.protocol === "https:" ? "443" : "80");
     const protocol      = currentURL.protocol === "https:" ? "wss:" : "ws:";
     const webserverURL  = currentURL.hostname;
     const websocketURL  = `${protocol}//${webserverURL}:${webserverPort}/data_plugins`;
 
-    const socket = new WebSocket(websocketURL);
+    metricsSocket = new WebSocket(websocketURL);
 
-    socket.onopen = () => {
+    metricsSocket.onopen = () => {
       console.log("[MetricsMeters] WebSocket connection opened");
     };
 
-    socket.onmessage = (event) => {
+    metricsSocket.onmessage = (event) => {
       let message;
       try {
         message = JSON.parse(event.data);
@@ -951,13 +959,25 @@ function updateMeter(meterId, level) {
       }
     };
 
-    socket.onerror = (error) => {
+    metricsSocket.onerror = (error) => {
       console.error("[MetricsMeters] WebSocket error:", error);
     };
 
-    socket.onclose = () => {
+    metricsSocket.onclose = () => {
       console.log("[MetricsMeters] WebSocket connection closed");
+      metricsSocket = null;
     };
+  }
+
+  function closeMetricsWebSocket() {
+    if (metricsSocket) {
+      try {
+        metricsSocket.close();
+      } catch (e) {
+        console.error("[MetricsMeters] Error closing WebSocket:", e);
+      }
+      metricsSocket = null;
+    }
   }
 
   // ---------------------------------------------------------------
@@ -1048,6 +1068,7 @@ function updateMeter(meterId, level) {
     levels,
     updateMeter,
     initMeters,
+    cleanup: closeMetricsWebSocket,
 
     // Setters called by metricsmonitor-header.js
     setStereoStatus(isActive) {

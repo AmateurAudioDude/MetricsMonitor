@@ -797,8 +797,23 @@ function setupMpxSocket() {
       if (!msg || typeof msg !== "object" || msg.type !== "MPX" || !Array.isArray(msg.value)) return;
       handleMpxArray(msg.value);
     };
+
+    mpxSocket.onclose = () => {
+      mpxSocket = null;
+    };
   } catch {
     setTimeout(setupMpxSocket, 5000);
+  }
+}
+
+function closeMpxSocket() {
+  if (mpxSocket) {
+    try {
+      mpxSocket.close();
+    } catch (e) {
+      console.error("[MetricsMeters] Error closing WebSocket:", e);
+    }
+    mpxSocket = null;
   }
 }
 
@@ -842,6 +857,7 @@ function init(containerId = "level-meter-container") {
 window.MetricsAnalyzer = {
   init,
   zoomReset,
+  cleanup: closeMpxSocket,
 };
 
 })();
