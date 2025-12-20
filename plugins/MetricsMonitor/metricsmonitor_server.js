@@ -1119,6 +1119,8 @@ if (!ENABLE_MPX) {
       }
 
       // 6) Build MPX array (0–100 kHz, reduced by BIN_STEP)
+      // Send only magnitudes, not frequencies, to reduce bandwidth
+      // Client calculates frequencies as: f = (binIndex * BIN_STEP * SAMPLE_RATE) / FFT_SIZE
       const mpx = [];
       for (let i = 0; i < halfLen; i += BIN_STEP) {
         const f = (i * SAMPLE_RATE) / FFT_SIZE;
@@ -1132,7 +1134,8 @@ if (!ENABLE_MPX) {
         }
         const avgMag = sum / (count || 1);
 
-        mpx.push({ f, m: avgMag });
+        // Round to 5 decimal places to reduce JSON size
+        mpx.push(Math.round(avgMag * 100000) / 100000);
       }
 
       if (mpx.length > 0) {

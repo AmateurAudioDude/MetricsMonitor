@@ -343,7 +343,8 @@ function handleMpxArray(data) {
 
   const arr = [];
   for (let i = 0; i < data.length; i++) {
-    const mag = data[i].m || 0;
+    // Support both inefficient format {f, m} and new compact data-saving format (just magnitude)
+    const mag = (typeof data[i] === 'number') ? data[i] : (data[i].m || 0);
     let db = 20 * Math.log10(mag + 1e-15);
     if (db < MPX_DB_MIN_DEFAULT) db = MPX_DB_MIN_DEFAULT;
     if (db > MPX_DB_MAX_DEFAULT) db = MPX_DB_MAX_DEFAULT;
