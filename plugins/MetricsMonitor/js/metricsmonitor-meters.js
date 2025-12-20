@@ -809,6 +809,7 @@ function updateMeter(meterId, level) {
     function setupAudioMeters() {
     if (
       typeof Stream === "undefined" ||
+      !Stream ||
       !Stream.Fallback ||
       !Stream.Fallback.Player ||
       !Stream.Fallback.Player.Amplification

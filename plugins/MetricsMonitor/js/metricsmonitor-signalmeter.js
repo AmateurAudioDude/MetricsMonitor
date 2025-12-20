@@ -174,6 +174,7 @@ function setupAudioEQ() {
   // Warten bis das Stream-Objekt verfügbar ist
   if (
     typeof Stream === "undefined" ||
+    !Stream ||
     !Stream.Fallback ||
     !Stream.Fallback.Player ||
     !Stream.Fallback.Player.Amplification
@@ -387,6 +388,7 @@ function initSignalMeter(containerOrId = "level-meter-container") {
 
   if (
     typeof Stream !== "undefined" &&
+    Stream &&
     Stream.Fallback &&
     Stream.Fallback.Player &&
     Stream.Fallback.Player.Amplification
