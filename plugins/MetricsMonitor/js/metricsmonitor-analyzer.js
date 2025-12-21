@@ -43,8 +43,10 @@ const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
 const HOST = currentURL.hostname;
 const WS_URL = `${protocol}//${HOST}:${PORT}/data_plugins`;
 
+let ws = null;
+let wsCleaned = false;
+
 const MpxHub = (() => {
-  let ws = null;
   let reconnectTimer = null;
   const listeners = new Set();
 
@@ -68,6 +70,12 @@ const MpxHub = (() => {
   }
 
   function scheduleReconnect() {
+    if (wsCleaned) {
+        // return only if mode has changed to prevent reconnect timer from running
+        ws = null;
+        wsCleaned = false;
+        return;
+    }
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -84,6 +92,18 @@ const MpxHub = (() => {
 
   return { subscribe, connect };
 })();
+
+function closeMpxSocket() {
+  if (ws) {
+    try {
+      ws.close();
+      wsCleaned = true;
+    } catch (e) {
+      console.error("[MetricsMeters] Error closing WebSocket:", e);
+    }
+    ws = null;
+  }
+}
 
 /////////////////////////////////////////////////////////////////
 // Keyboard Hub (Attach once, dispatch to active instance)
@@ -951,7 +971,7 @@ function destroy(target) {
 }
 
 // Global Exports
-window.MetricsAnalyzer = window.MetricsAnalyzer || {};
+window.MetricsAnalyzer = window.MetricsAnalyzer || { cleanup: closeMpxSocket };
 window.MetricsAnalyzer.init = init;
 window.MetricsAnalyzer.zoomReset = zoomReset;
 window.MetricsAnalyzer.resize = resize;

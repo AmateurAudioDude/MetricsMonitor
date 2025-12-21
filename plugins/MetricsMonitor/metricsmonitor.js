@@ -500,11 +500,23 @@ function syncTextWebSocketMode(isInitial) {
 
 
   // =========================================================
+  // Cleanup function for current mode
+  // =========================================================
+  function cleanupCurrentMode() {
+    if (mode === 1 && window.MetricsMeters?.cleanup) {
+      window.MetricsMeters.cleanup();
+    } else if (mode === 2 && window.MetricsAnalyzer?.cleanup) {
+      window.MetricsAnalyzer.cleanup();
+    }
+  }
+
+  // =========================================================
   // Switching & Panel Logic
   // =========================================================
   function switchModeWithFade(nextMode) {
     const meters = document.getElementById("level-meter-container");
     if (!meters) {
+      cleanupCurrentMode();  // Cleanup before switching
       mode = nextMode;
       buildMeters();
       syncTextWebSocketMode(false);
@@ -521,6 +533,7 @@ function syncTextWebSocketMode(isInitial) {
     meters.style.opacity = "0";
 
     setTimeout(() => {
+      cleanupCurrentMode();  // Cleanup before switching
       mode = nextMode;
       buildMeters();
       syncTextWebSocketMode(false);
