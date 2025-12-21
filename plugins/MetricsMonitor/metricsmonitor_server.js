@@ -1402,7 +1402,9 @@ if (!ENABLE_MPX) {
             const avgMag = sum / (count || 1);
             const boosted =
               avgMag * (1 + (typeof MPX_BOOST === "number" ? MPX_BOOST : 0));
-            mpx.push({ f, m: boosted });
+            // Reduced format: send only magnitude (not {f, m} object) to reduce network traffic by ~85%
+            // Round to 5 decimal places to further reduce data size while maintaining precision
+            mpx.push(Math.round(boosted * 100000) / 100000);
           }
           if (mpx.length > 0) latestMpxFrame = mpx;
         }

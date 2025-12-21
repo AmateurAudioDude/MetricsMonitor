@@ -657,7 +657,9 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const arr = [];
     for (let i = 0; i < data.length; i++) {
-      const mag = data[i]?.m || 0;
+      // Support both old format {f, m} and new format (just magnitude number)
+      // This provides backward compatibility with older server versions
+      const mag = (typeof data[i] === 'number') ? data[i] : (data[i]?.m || 0);
       let db = 20 * Math.log10(mag + 1e-15);
       if (db < MPX_DB_MIN_DEFAULT) db = MPX_DB_MIN_DEFAULT;
       if (db > MPX_DB_MAX_DEFAULT) db = MPX_DB_MAX_DEFAULT;
