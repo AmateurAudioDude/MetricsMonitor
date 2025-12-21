@@ -1060,6 +1060,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           updateMeter,
           initMeters,
           cleanup: closeMetricsWebSocket,
+          createWebSocket: setupMetricsWebSocket,
 
           // Enhanced Reset function
           resetValues() {

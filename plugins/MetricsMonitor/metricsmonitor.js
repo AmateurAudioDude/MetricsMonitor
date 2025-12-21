@@ -503,10 +503,58 @@ function syncTextWebSocketMode(isInitial) {
   // Cleanup function for current mode
   // =========================================================
   function cleanupCurrentMode() {
-    if (mode === 1 && window.MetricsMeters?.cleanup) {
-      window.MetricsMeters.cleanup();
-    } else if (mode === 2 && window.MetricsAnalyzer?.cleanup) {
-      window.MetricsAnalyzer.cleanup();
+    //console.log('mode:', mode, ' c-mode:', activeCanvasMode, ' c-visible:', isCanvasVisible);
+    if (!isCanvasVisible || activeCanvasMode !== 2) {
+      if (mode === 1 && window.MetricsAnalyzer?.cleanup) window.MetricsAnalyzer.cleanup();
+      if (mode === 2 && window.MetricsMeters?.cleanup) window.MetricsMeters.cleanup();
+      if (mode !== 1 && mode !== 2 && window.MetricsAnalyzer?.cleanup && window.MetricsMeters?.cleanup) {
+        window.MetricsAnalyzer.cleanup();
+        window.MetricsMeters.cleanup();
+      }
+    } else if (isCanvasVisible && activeCanvasMode === 2) {
+      if (mode !== 1) window.MetricsMeters?.createWebSocket();
+      if (mode !== 2) {
+        // --- 1. Analyzer Init ---
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.init === "function") {
+          window.MetricsAnalyzer.init("mm-combo-analyzer-container", {
+            instanceKey: "combo-main",
+            embedded: true,
+            useLegacyCss: false
+          });
+
+          // Safe Resize
+          setTimeout(() => {
+            const wrap = document.getElementById("mm-combo-analyzer-container");
+            const canvas = wrap ? (wrap.querySelector("canvas") || document.querySelector("#mm-combo-analyzer-container canvas")) : null;
+
+            if (wrap && canvas) {
+                wrap.style.border = "none";
+                const safeResize = () => {
+                    const width = wrap.clientWidth;
+                    const height = wrap.clientHeight;
+                    if (!width || width === 0) { window.requestAnimationFrame(safeResize); return; }
+                    const dpr = window.devicePixelRatio || 1;
+                    if (canvas.width !== Math.floor(width * dpr)) {
+                         canvas.width = Math.floor(width * dpr);
+                         canvas.height = Math.floor(height * dpr);
+                         const ctx = canvas.getContext("2d");
+                         if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                         try {
+                            if (typeof Chart !== "undefined" && Chart.getChart) {
+                                const ch = Chart.getChart(canvas);
+                                if (ch) ch.resize();
+                            }
+                        } catch(e){}
+                    }
+                };
+                window.requestAnimationFrame(safeResize);
+                const resizeObserver = new ResizeObserver(() => { window.requestAnimationFrame(safeResize); });
+                resizeObserver.observe(wrap);
+            } 
+          }, 200); 
+        }
+      }
+
     }
   }
 
@@ -516,8 +564,8 @@ function syncTextWebSocketMode(isInitial) {
   function switchModeWithFade(nextMode) {
     const meters = document.getElementById("level-meter-container");
     if (!meters) {
-      cleanupCurrentMode();  // Cleanup before switching
       mode = nextMode;
+      cleanupCurrentMode();  // Cleanup before switching
       buildMeters();
       syncTextWebSocketMode(false);
       return;
@@ -533,8 +581,8 @@ function syncTextWebSocketMode(isInitial) {
     meters.style.opacity = "0";
 
     setTimeout(() => {
-      cleanupCurrentMode();  // Cleanup before switching
       mode = nextMode;
+      cleanupCurrentMode();  // Cleanup before switching
       buildMeters();
       syncTextWebSocketMode(false);
 
@@ -992,6 +1040,8 @@ ensureTextSocket().then(() => {
 
     isCanvasVisible = !isCanvasVisible;
 
+    cleanupCurrentMode();  // Cleanup before switching on canvas open/close
+
     const button = document.getElementById("mpx-signal-toggle-button");
     const mmContainerCombo = document.getElementById("mm-mpx-combo-flex");
     const mmContainerSignal = document.getElementById("mm-signal-analyzer-flex");
@@ -1185,6 +1235,8 @@ ensureTextSocket().then(() => {
       if (targetMode === 4 && window.mmTriggerResizeSignal) window.mmTriggerResizeSignal();
       
       setTimeout(() => { isCanvasSwitching = false; }, FADE_MS);
+
+      cleanupCurrentMode();  // Cleanup before switching on canvas mode switch
     }, FADE_MS);
   }
 
