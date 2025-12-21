@@ -19,7 +19,8 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 - ESP32 MPX Auto Switching synchronized with Headless TEF command
 
 ## Important note for this version: 
-To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
+- After installation, please set all calibration values ​​to 0 and then readjust them by entering the values ​​to be added or subtracted in kHz.
+- To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
 https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
 
 ## Installation notes
