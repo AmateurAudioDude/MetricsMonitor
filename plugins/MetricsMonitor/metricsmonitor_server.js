@@ -44,7 +44,8 @@ const defaultConfig = {
   MPXInputCard: "",
   fftLibrary: "fft-js",
   fftSize: 1024,
-  SpectrumAverageLevel: 15,
+  SpectrumAttackLevel: 3,
+  SpectrumDecayLevel: 15,
   minSendIntervalMs: 30,
   pilotCalibration: 0.0,
   mpxCalibration: 0.0,
@@ -72,6 +73,11 @@ function normalizePluginConfig(json) {
   ) {
     json.MPXStereoDecoder = json.ExtStereoDecoder;
     delete json.ExtStereoDecoder;
+  }
+
+  // Remove deprecated "SpectrumAverageLevel" if it exists
+  if (typeof json.SpectrumAverageLevel !== "undefined") {
+    delete json.SpectrumAverageLevel;
   }
 
   // Set defaults for missing keys
@@ -104,10 +110,14 @@ function normalizePluginConfig(json) {
       typeof json.fftSize !== "undefined"
         ? json.fftSize
         : defaultConfig.fftSize,
-    SpectrumAverageLevel:
-      typeof json.SpectrumAverageLevel !== "undefined"
-        ? json.SpectrumAverageLevel
-        : defaultConfig.SpectrumAverageLevel,
+    SpectrumAttackLevel:
+      typeof json.SpectrumAttackLevel !== "undefined"
+        ? json.SpectrumAttackLevel
+        : defaultConfig.SpectrumAttackLevel,
+    SpectrumDecayLevel:
+      typeof json.SpectrumDecayLevel !== "undefined"
+        ? json.SpectrumDecayLevel
+        : defaultConfig.SpectrumDecayLevel,
     minSendIntervalMs:
       typeof json.minSendIntervalMs !== "undefined"
         ? json.minSendIntervalMs
@@ -278,15 +288,26 @@ function getMinSendIntervalMs(cfg) {
     : defaultConfig.minSendIntervalMs;
 }
 
-function getSpectrumAverageLevel(cfg) {
-  if (!cfg) return defaultConfig.SpectrumAverageLevel;
+function getSpectrumAttackLevel(cfg) {
+  if (!cfg) return defaultConfig.SpectrumAttackLevel;
   const val =
-    typeof cfg.SpectrumAverageLevel === "string"
-      ? Number(cfg.SpectrumAverageLevel)
-      : cfg.SpectrumAverageLevel;
+    typeof cfg.SpectrumAttackLevel === "string"
+      ? Number(cfg.SpectrumAttackLevel)
+      : cfg.SpectrumAttackLevel;
   return typeof val === "number" && !Number.isNaN(val) && val > 0
     ? val
-    : defaultConfig.SpectrumAverageLevel;
+    : defaultConfig.SpectrumAttackLevel;
+}
+
+function getSpectrumDecayLevel(cfg) {
+  if (!cfg) return defaultConfig.SpectrumDecayLevel;
+  const val =
+    typeof cfg.SpectrumDecayLevel === "string"
+      ? Number(cfg.SpectrumDecayLevel)
+      : cfg.SpectrumDecayLevel;
+  return typeof val === "number" && !Number.isNaN(val) && val > 0
+    ? val
+    : defaultConfig.SpectrumDecayLevel;
 }
 
 function getMpxMode(cfg) {
@@ -436,7 +457,8 @@ let mpDur60 = 0;
 let devSamplesTotal = 0;
 let devSamplesExceed = 0;
 
-const SPECTRUM_AVERAGE_LEVELS = getSpectrumAverageLevel(configPlugin);
+const SPECTRUM_ATTACK_LEVEL = getSpectrumAttackLevel(configPlugin);
+const SPECTRUM_DECAY_LEVEL = getSpectrumDecayLevel(configPlugin);
 const MPX_MODE = getMpxMode(configPlugin);
 const MPX_STEREO_DECODER = getMPXStereoDecoder(configPlugin);
 const MPX_INPUT_CARD = getMPXInputCard(configPlugin);
@@ -703,7 +725,8 @@ function updateSettings() {
       `const MPXInputCard = "${MPX_INPUT_CARD}";    // Do not touch - this value is automatically updated via the config file\n` +
       `const fftLibrary = "${FFT_LIBRARY}";    // Do not touch - this value is automatically updated via the config file\n` +
       `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumAverageLevel = ${SPECTRUM_AVERAGE_LEVELS};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const SpectrumAttackLevel = ${SPECTRUM_ATTACK_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
+      `const SpectrumDecayLevel = ${SPECTRUM_DECAY_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
       `const minSendIntervalMs = ${MIN_SEND_INTERVAL_MS};    // Do not touch - this value is automatically updated via the config file\n` +
       `const pilotCalibration = ${PILOT_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
       `const mpxCalibration = ${MPX_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
@@ -728,6 +751,8 @@ function updateSettings() {
       .replace(/^\s*const\s+fftLibrary\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+SpectrumAttackLevel\s*=.*;[^\n]*\n?/gm, "")
+      .replace(/^\s*const\s+SpectrumDecayLevel\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+pilotCalibration\s*=.*;[^\n]*\n?/gm, "")
       .replace(/^\s*const\s+mpxCalibration\s*=.*;[^\n]*\n?/gm, "")
@@ -979,7 +1004,10 @@ if (!ENABLE_MPX) {
   logInfo(`[MPX] FFT_SIZE from metricsmonitor.json → ${FFT_SIZE} points`);
   logInfo(`[MPX] Analyzer enabled? → ${ENABLE_ANALYZER}`);
   logInfo(
-    `[MPX] SpectrumAverageLevel from metricsmonitor.json → ${SPECTRUM_AVERAGE_LEVELS}`
+    `[MPX] SpectrumAttackLevel from metricsmonitor.json → ${SPECTRUM_ATTACK_LEVEL}`
+  );
+  logInfo(
+    `[MPX] SpectrumDecayLevel from metricsmonitor.json → ${SPECTRUM_DECAY_LEVEL}`
   );
   logInfo(
     `[MPX] minSendIntervalMs from metricsmonitor.json → ${MIN_SEND_INTERVAL_MS} ms`

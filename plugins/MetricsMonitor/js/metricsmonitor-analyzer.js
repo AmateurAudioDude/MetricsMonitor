@@ -196,8 +196,6 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   const GRID_X_OFFSET = 30;
   const BASE_SCALE_DB = [-10, -20, -30, -40, -50, -60, -70, -80];
 
-  let MPX_AVERAGE_LEVELS = SpectrumAverageLevel;
-
   // Defaults
   const MPX_DB_MIN_DEFAULT = -80;
   const MPX_DB_MAX_DEFAULT = 0;
@@ -672,8 +670,16 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const len = Math.min(arr.length, mpxSmoothSpectrum.length);
     for (let i = 0; i < len; i++) {
-      mpxSmoothSpectrum[i] =
-        (mpxSmoothSpectrum[i] * (MPX_AVERAGE_LEVELS - 1) + arr[i]) / MPX_AVERAGE_LEVELS;
+      // Asymmetric smoothing: fast attack, slow decay
+      if (arr[i] > mpxSmoothSpectrum[i]) {
+        // Attack: signal increasing - use SpectrumAttackLevel
+        mpxSmoothSpectrum[i] =
+          (mpxSmoothSpectrum[i] * (SpectrumAttackLevel - 1) + arr[i]) / SpectrumAttackLevel;
+      } else {
+        // Decay: signal decreasing - use SpectrumDecayLevel
+        mpxSmoothSpectrum[i] =
+          (mpxSmoothSpectrum[i] * (SpectrumDecayLevel - 1) + arr[i]) / SpectrumDecayLevel;
+      }
     }
     if (arr.length > len) {
       for (let i = len; i < arr.length; i++) mpxSmoothSpectrum[i] = arr[i];
