@@ -43,10 +43,8 @@ const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
 const HOST = currentURL.hostname;
 const WS_URL = `${protocol}//${HOST}:${PORT}/data_plugins`;
 
-let ws = null;
-let wsCleaned = false;
-
 const MpxHub = (() => {
+  let ws = null;
   let reconnectTimer = null;
   const listeners = new Set();
 
@@ -70,12 +68,6 @@ const MpxHub = (() => {
   }
 
   function scheduleReconnect() {
-    if (wsCleaned) {
-        // return only if mode has changed to prevent reconnect timer from running
-        ws = null;
-        wsCleaned = false;
-        return;
-    }
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -92,18 +84,6 @@ const MpxHub = (() => {
 
   return { subscribe, connect };
 })();
-
-function closeMpxSocket() {
-  if (ws) {
-    try {
-      ws.close();
-      wsCleaned = true;
-    } catch (e) {
-      console.error("[MetricsMeters] Error closing WebSocket:", e);
-    }
-    ws = null;
-  }
-}
 
 /////////////////////////////////////////////////////////////////
 // Keyboard Hub (Attach once, dispatch to active instance)
@@ -195,6 +175,8 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   const Y_STRETCH = 0.8;
   const GRID_X_OFFSET = 30;
   const BASE_SCALE_DB = [-10, -20, -30, -40, -50, -60, -70, -80];
+
+  let MPX_AVERAGE_LEVELS = SpectrumAverageLevel;
 
   // Defaults
   const MPX_DB_MIN_DEFAULT = -80;
@@ -655,9 +637,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const arr = [];
     for (let i = 0; i < data.length; i++) {
-      // Support both old format {f, m} and new format (just magnitude number)
-      // This provides backward compatibility with older server versions
-      const mag = (typeof data[i] === 'number') ? data[i] : (data[i]?.m || 0);
+      const mag = data[i]?.m || 0;
       let db = 20 * Math.log10(mag + 1e-15);
       if (db < MPX_DB_MIN_DEFAULT) db = MPX_DB_MIN_DEFAULT;
       if (db > MPX_DB_MAX_DEFAULT) db = MPX_DB_MAX_DEFAULT;
@@ -670,16 +650,8 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const len = Math.min(arr.length, mpxSmoothSpectrum.length);
     for (let i = 0; i < len; i++) {
-      // Asymmetric smoothing: fast attack, slow decay
-      if (arr[i] > mpxSmoothSpectrum[i]) {
-        // Attack: signal increasing - use SpectrumAttackLevel
-        mpxSmoothSpectrum[i] =
-          (mpxSmoothSpectrum[i] * (SpectrumAttackLevel - 1) + arr[i]) / SpectrumAttackLevel;
-      } else {
-        // Decay: signal decreasing - use SpectrumDecayLevel
-        mpxSmoothSpectrum[i] =
-          (mpxSmoothSpectrum[i] * (SpectrumDecayLevel - 1) + arr[i]) / SpectrumDecayLevel;
-      }
+      mpxSmoothSpectrum[i] =
+        (mpxSmoothSpectrum[i] * (MPX_AVERAGE_LEVELS - 1) + arr[i]) / MPX_AVERAGE_LEVELS;
     }
     if (arr.length > len) {
       for (let i = len; i < arr.length; i++) mpxSmoothSpectrum[i] = arr[i];
@@ -979,7 +951,7 @@ function destroy(target) {
 }
 
 // Global Exports
-window.MetricsAnalyzer = window.MetricsAnalyzer || { cleanup: closeMpxSocket };
+window.MetricsAnalyzer = window.MetricsAnalyzer || {};
 window.MetricsAnalyzer.init = init;
 window.MetricsAnalyzer.zoomReset = zoomReset;
 window.MetricsAnalyzer.resize = resize;

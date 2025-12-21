@@ -21,8 +21,7 @@ const MPXStereoDecoder = "off";    // Do not touch - this value is automatically
 const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
 const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
 const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
-const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
 const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
 const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
@@ -916,13 +915,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           const protocol      = currentURL.protocol === "https:" ? "wss:" : "ws:";
           const webserverURL  = currentURL.hostname;
           const websocketURL  = `${protocol}//${webserverURL}:${webserverPort}/data_plugins`;
-
-          // Prevent multiple connections - check if socket is already open or connecting
-          if (mpxSocket && (mpxSocket.readyState === WebSocket.OPEN || mpxSocket.readyState === WebSocket.CONNECTING)) {
-              return;
-          }
-
-          // Close existing socket if present
+      
           if (mpxSocket) {
               try {
                   mpxSocket.close();
@@ -932,7 +925,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
 
           const socket = new WebSocket(websocketURL);
           mpxSocket = socket; // Save reference
-
+      
           socket.onmessage = (event) => {
             let message;
             try {
@@ -940,47 +933,30 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
             } catch {
               return;
             }
-
+      
             if (Array.isArray(message)) {
               handleMpxArray(message);
               return;
             }
-
+      
             if (!message || typeof message !== "object") return;
             const type = message.type ? String(message.type).toLowerCase() : "";
-
+      
             if (type === "mpx") {
               if (typeof message.peak === "number") {
                   mpxPeakVal = message.peak;
                   pilotPeakVal = (typeof message.pilotKHz === "number") ? message.pilotKHz : (message.pilot || 0);
                   rdsPeakVal   = (typeof message.rdsKHz === "number") ? message.rdsKHz : (message.rds || 0);
-                  noiseFloorVal = message.noise || 0.000001;
+                  noiseFloorVal = message.noise || 0.000001; 
                   hasTimeDomainData = true;
               } else {
                   hasTimeDomainData = false;
               }
-
+              
               handleMpxArray(message.value);
               return;
             }
           };
-
-          // Add onclose handler to reset socket reference
-          socket.onclose = () => {
-              mpxSocket = null;
-          };
-        }
-
-        // Cleanup function to close WebSocket connection
-        function closeMetricsWebSocket() {
-          if (mpxSocket) {
-              try {
-                  mpxSocket.close();
-              } catch(e) {
-                  console.error("[MetricsMeters] Error closing WebSocket:", e);
-              }
-              mpxSocket = null;
-          }
         }
       
         function initMeters(levelMeterContainer) {
@@ -1060,8 +1036,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           levels,
           updateMeter,
           initMeters,
-          cleanup: closeMetricsWebSocket,
-
+          
           // Enhanced Reset function
           resetValues() {
               mpxDisplayValue = 0;
@@ -1071,7 +1046,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
               levels.stereoPilot = 0;
               levels.rds = 0;
               pilotSmooth = 0;
-
+              
               // RDS Reset
               rdsDisplay = 0;
               rdsLongPrev = 0;
