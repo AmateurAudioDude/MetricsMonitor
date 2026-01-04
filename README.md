@@ -17,6 +17,7 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 - Added custom color adjustments for meter displays and highest peak
 - Adjusting the RDS meter scale to the pilot display
 - Configuration variables restructured for improved clarity (see configuraion options)
+- An automatic backup of the JSON configuration file is created
 
 ## Important note for this version: 
 - After installation, please set all calibration values ​​to 0 and then readjust them by entering the values ​​to be added or subtracted in kHz.
