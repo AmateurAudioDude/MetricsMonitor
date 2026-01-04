@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  metricsmonitor-analyzer.js						 (V1.4)  //
+//  metricsmonitor-analyzer.js						(V1.5B   //
 //                                                           //
-//  by Highpoint               last update: 20.12.2025       //
+//  by Highpoint               last update: 04.01.2026       //
 //                                                           //
 //  Thanks for support by                                    //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
@@ -12,28 +12,33 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
-const CANVAS_SEQUENCE = [4,2];    // Do not touch - this value is automatically updated via the config file
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const MPXboost = 0;    // Do not touch - this value is automatically updated via the config file
 const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
-const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
-const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const rdsCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
-const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
+const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const CANVAS_SEQUENCE = [2,4];    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
 const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
+const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
+const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
+const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
 
-// Configuration constants - updated automatically via config file
 /////////////////////////////////////////////////////////////////
 // Shared WebSocket Hub (One connection for N renderers)
 /////////////////////////////////////////////////////////////////
@@ -43,8 +48,10 @@ const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
 const HOST = currentURL.hostname;
 const WS_URL = `${protocol}//${HOST}:${PORT}/data_plugins`;
 
+let ws = null;
+let wsCleaned = false;
+
 const MpxHub = (() => {
-  let ws = null;
   let reconnectTimer = null;
   const listeners = new Set();
 
@@ -68,6 +75,12 @@ const MpxHub = (() => {
   }
 
   function scheduleReconnect() {
+    if (wsCleaned) {
+        // return only if mode has changed to prevent reconnect timer from running
+        ws = null;
+        wsCleaned = false;
+        return;
+    }
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -84,6 +97,18 @@ const MpxHub = (() => {
 
   return { subscribe, connect };
 })();
+
+function closeMpxSocket() {
+  if (ws) {
+    try {
+      ws.close();
+      wsCleaned = true;
+    } catch (e) {
+      console.error("[MetricsMeters] Error closing WebSocket:", e);
+    }
+    ws = null;
+  }
+}
 
 /////////////////////////////////////////////////////////////////
 // Keyboard Hub (Attach once, dispatch to active instance)
@@ -176,8 +201,6 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   const GRID_X_OFFSET = 30;
   const BASE_SCALE_DB = [-10, -20, -30, -40, -50, -60, -70, -80];
 
-  let MPX_AVERAGE_LEVELS = SpectrumAverageLevel;
-
   // Defaults
   const MPX_DB_MIN_DEFAULT = -80;
   const MPX_DB_MAX_DEFAULT = 0;
@@ -185,8 +208,8 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   let MPX_FMAX_HZ = 76000;
 
   let CURVE_GAIN = 0.5;
-  let CURVE_Y_OFFSET_DB = CurveYOffset;
-  let CURVE_VERTICAL_DYNAMICS = CurveYDynamics;
+  let CURVE_Y_OFFSET_DB = SpectrumYOffset;
+  let CURVE_VERTICAL_DYNAMICS = SpectrumYDynamics;
   let CURVE_X_STRETCH = 1.40;
   let CURVE_X_SCALE = 1.0;
 
@@ -417,11 +440,14 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   // Drawing Functions
   //////////////////////////////////////////////////////////////////
   function drawMpxBackground() {
-    const grd = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    const h = canvas.clientHeight; 
+    const w = canvas.clientWidth;
+    
+    const grd = ctx.createLinearGradient(0, 0, 0, h);
     grd.addColorStop(0, "#001225");
     grd.addColorStop(1, "#002044");
     ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, w, h);
   }
 
   function drawMagnifierIcon() {
@@ -473,7 +499,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     return markers;
   }
 
-  function drawMpxGrid() {
+function drawMpxGrid() {
     ctx.lineWidth = 0.5;
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.font = "10px Arial";
@@ -490,19 +516,23 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     ctx.font = "11px Arial";
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     const gridTopY = TOP_MARGIN;
-    const gridBottomY = canvas.height - BOTTOM_MARGIN;
+    
+    // FIX: Use clientHeight instead of height
+    const logicalHeight = canvas.clientHeight;
+    const logicalWidth = canvas.clientWidth;
+    const gridBottomY = logicalHeight - BOTTOM_MARGIN;
 
     markers.forEach(m => {
       let x;
       if (zoomLevel > 1) {
         if (m.f < visibleStartHz || m.f > visibleEndHz) return;
         const normalizedPos = (m.f - visibleStartHz) / (visibleEndHz - visibleStartHz);
-        x = GRID_X_OFFSET + normalizedPos * (canvas.width - GRID_X_OFFSET);
+        x = GRID_X_OFFSET + normalizedPos * (logicalWidth - GRID_X_OFFSET);
       } else {
         const horizontalScale = zoomLevel;
         x = GRID_X_OFFSET +
           (m.f / (MPX_FMAX_HZ * LABEL_CURVE_X_SCALE)) *
-          (canvas.width - GRID_X_OFFSET) * horizontalScale;
+          (logicalWidth - GRID_X_OFFSET) * horizontalScale;
       }
       ctx.strokeStyle = "rgba(255,255,255,0.10)";
       ctx.beginPath();
@@ -514,17 +544,18 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     });
 
     const range = getDisplayRange();
-    const usableHeight = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
+    // FIX: Use logicalHeight for calculation
+    const usableHeight = logicalHeight - TOP_MARGIN - BOTTOM_MARGIN;
     const dbMarkers = generateDbMarkers();
     dbMarkers.forEach(v => {
       if (v < visibleDbMin || v > visibleDbMax) return;
       const norm = (v - range.min) / (range.max - range.min);
       const y = TOP_MARGIN + (1 - norm) * usableHeight * Y_STRETCH;
-      if (y >= TOP_MARGIN && y <= canvas.height - BOTTOM_MARGIN) {
+      if (y >= TOP_MARGIN && y <= logicalHeight - BOTTOM_MARGIN) {
         ctx.strokeStyle = "rgba(255,255,255,0.12)";
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
+        ctx.lineTo(logicalWidth, y); // FIX: Use logicalWidth
         ctx.stroke();
         ctx.textAlign = "right";
         ctx.fillText(`${v}`, OFFSET_X - 6, y + 10 + LABEL_Y_OFFSET);
@@ -535,13 +566,18 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   function drawMpxSpectrumTrace() {
     if (!mpxSpectrum.length) return;
     const range = getDisplayRange();
-    const usableHeight = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
+    
+    // FIX: Use logical dimensions
+    const logicalWidth = canvas.clientWidth;
+    const logicalHeight = canvas.clientHeight;
+    
+    const usableHeight = logicalHeight - TOP_MARGIN - BOTTOM_MARGIN;
     ctx.beginPath();
     ctx.strokeStyle = "#8feaff";
     ctx.lineWidth = 1.0;
 
     if (zoomLevel > 1) {
-      const usableWidth = canvas.width - OFFSET_X;
+      const usableWidth = logicalWidth - OFFSET_X;
       const totalBins = mpxSpectrum.length;
       const startBin = freqToBin(visibleStartHz, totalBins);
       const endBin = freqToBin(visibleEndHz, totalBins);
@@ -566,7 +602,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
       }
     } else {
       const horizontalScale = zoomLevel;
-      const usableWidth = (canvas.width - OFFSET_X) * CURVE_X_SCALE;
+      const usableWidth = (logicalWidth - OFFSET_X) * CURVE_X_SCALE;
       const leftStart = OFFSET_X;
       for (let i = 0; i < mpxSpectrum.length; i++) {
         let rawVal = mpxSpectrum[i];
@@ -637,7 +673,9 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const arr = [];
     for (let i = 0; i < data.length; i++) {
-      const mag = data[i]?.m || 0;
+      // Support both old format {f, m} and new format (just magnitude number)
+      // This provides backward compatibility with older server versions
+      const mag = (typeof data[i] === 'number') ? data[i] : (data[i]?.m || 0);
       let db = 20 * Math.log10(mag + 1e-15);
       if (db < MPX_DB_MIN_DEFAULT) db = MPX_DB_MIN_DEFAULT;
       if (db > MPX_DB_MAX_DEFAULT) db = MPX_DB_MAX_DEFAULT;
@@ -650,8 +688,16 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
     const len = Math.min(arr.length, mpxSmoothSpectrum.length);
     for (let i = 0; i < len; i++) {
-      mpxSmoothSpectrum[i] =
-        (mpxSmoothSpectrum[i] * (MPX_AVERAGE_LEVELS - 1) + arr[i]) / MPX_AVERAGE_LEVELS;
+      // Asymmetric smoothing: fast attack, slow decay
+      if (arr[i] > mpxSmoothSpectrum[i]) {
+        // Attack: signal increasing - use SpectrumAttackLevel
+        mpxSmoothSpectrum[i] =
+          (mpxSmoothSpectrum[i] * (SpectrumAttackLevel - 1) + arr[i]) / SpectrumAttackLevel;
+      } else {
+        // Decay: signal decreasing - use SpectrumDecayLevel
+        mpxSmoothSpectrum[i] =
+          (mpxSmoothSpectrum[i] * (SpectrumDecayLevel - 1) + arr[i]) / SpectrumDecayLevel;
+      }
     }
     if (arr.length > len) {
       for (let i = len; i < arr.length; i++) mpxSmoothSpectrum[i] = arr[i];
@@ -951,7 +997,7 @@ function destroy(target) {
 }
 
 // Global Exports
-window.MetricsAnalyzer = window.MetricsAnalyzer || {};
+window.MetricsAnalyzer = window.MetricsAnalyzer || { cleanup: closeMpxSocket };
 window.MetricsAnalyzer.init = init;
 window.MetricsAnalyzer.zoomReset = zoomReset;
 window.MetricsAnalyzer.resize = resize;

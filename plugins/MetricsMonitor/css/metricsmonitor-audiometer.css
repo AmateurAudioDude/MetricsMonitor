@@ -1,4 +1,4 @@
-/* Equalizer-Gruppe – vertikal (Titel oben, Balkenblock unten, Overlay in der Mitte) */
+/* AudioMeter-Gruppe – vertikal (Titel oben, Balkenblock unten, Overlay in der Mitte) */
 .eq-group {
   display: flex;
   flex-direction: column;
@@ -67,7 +67,7 @@
 }
 
 /* Vertical dB scale next to the meter bar */
-.meter-scale-equalizer {
+.meter-scale-AudioMeter {
   display: flex;
   flex-direction: column;
   justify-content: space-between;

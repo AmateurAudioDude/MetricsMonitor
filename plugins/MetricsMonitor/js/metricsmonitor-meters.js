@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  metricsmonitor-meters.js (V1.4)                          //
+//  metricsmonitor-meters.js                        (V1.5)   //
 //                                                           //
-//  by Highpoint               last update: 19.12.2025       //
+//  by Highpoint               last update: 04.01.2026       //
 //                                                           //
 //  Thanks for support by                                    //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
@@ -12,27 +12,33 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
-const CANVAS_SEQUENCE = [4,2];    // Do not touch - this value is automatically updated via the config file
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const MPXboost = 0;    // Do not touch - this value is automatically updated via the config file
 const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
-const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
-const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const rdsCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
-const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
+const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const CANVAS_SEQUENCE = [2,4];    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
 const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
-
+const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
+const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
+const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
+
     // ==========================================================
     // DEBUG CONFIGURATION
     // ==========================================================
@@ -40,7 +46,9 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     const DEBUG_INTERVAL_MS = 2000;   
     let lastDebugTime = 0;
 
-    // Custom CSS for value displays
+    // ==========================================================
+    // CSS INJECTION FOR RENDERING FIXES
+    // ==========================================================
     const style = document.createElement('style');
     style.innerHTML = `
       /* Value display above the bar */
@@ -54,6 +62,20 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
         margin-bottom: 2px;
         white-space: nowrap;
       }
+      /* Custom Peak Marker Style */
+      .segment.peak-flag {
+        opacity: 1.0 !important;
+        box-shadow: 0 0 4px rgba(255, 255, 255, 0.4);
+        z-index: 10;
+        /* Note: Background color is set dynamically via JS */
+      }
+      /* FIX: Transparent gaps that survive zooming */
+      .meter-bar .segment {
+        border-bottom: 1px solid transparent !important; /* The gap space */
+        background-clip: padding-box !important;         /* Cut color at border */
+        margin-bottom: 0 !important;                     /* No margin needed */
+        box-sizing: border-box;                          /* Height includes border */
+      }
     `;
     document.head.appendChild(style);
   
@@ -62,6 +84,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     const PILOT_ENABLED = (sampleRate !== 48000);
     const MPX_ENABLED   = (sampleRate === 192000);
   
+    // Global Levels State
     const levels = {
       left: 0,
       right: 0,
@@ -75,20 +98,22 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
   
     let websocketStereoActive = false;
     let websocketRdsActive = false;
-    
     let isRdsGateOpen = false;
   
+    // Config for Peak Indicators (2 Seconds Hold)
     const PEAK_CONFIG = {
       smoothing: 0.85,
-      holdMs: 5000
+      holdMs: 2000 
     };
   
+    // Peaks state for all channels including MPX
     const peaks = {
       left:  { value: 0, lastUpdate: Date.now() },
-      right: { value: 0, lastUpdate: Date.now() }
+      right: { value: 0, lastUpdate: Date.now() },
+      mpx:   { value: 0, lastUpdate: Date.now() } 
     };
   
-    // MPX Spectrum data
+    // MPX Spectrum data processing variables
     let mpxSpectrum = [];
     let mpxSmoothSpectrum = [];
     
@@ -104,37 +129,17 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     const MPX_AVG      = 6;
   
     let pilotSmooth    = 0;
-    let rdsShortPrev   = 0;
-    let rdsLongPrev    = 0;
+    
+    // Variables for simplified animations (smoothing)
+    let mpxDisplayValue = 0;
+    let rdsDisplayValue = 0;
+    let pilotDisplayValue = 0;
   
     let rdsLocked    = false;
     let rdsLockTimer = 18;
   
     function dbToAmp(db) {
       return Math.pow(10, db / 20);
-    }
-  
-    function bandPower(centerHz, bandHz) {
-      if (!mpxSpectrum.length) return 0;
-  
-      const N       = mpxSpectrum.length;
-      const maxFreq = MPX_FMAX;
-  
-      const fMin = centerHz - bandHz / 2;
-      const fMax = centerHz + bandHz / 2;
-  
-      const idxMin = Math.max(0, Math.floor((fMin / maxFreq) * (N - 1)));
-      const idxMax = Math.min(N - 1, Math.ceil((fMax / maxFreq) * (N - 1)));
-      if (idxMax <= idxMin) return 0;
-  
-      let p = 0;
-      for (let i = idxMin; i <= idxMax; i++) {
-        const db = mpxSpectrum[i];
-        if (!isFinite(db) || db < MPX_DB_MIN) continue;
-        const a = dbToAmp(db);
-        p += a * a;
-      }
-      return p;
     }
   
     // RF Unit handling
@@ -147,8 +152,32 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
         hfUnit = u.toLowerCase();
       }
     }
+
+    // ==========================================================
+    // COLOR HELPER FUNCTIONS
+    // ==========================================================
+    function parseRgb(rgbStr) {
+        const match = rgbStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (match) {
+            return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]) };
+        }
+        return { r: 0, g: 255, b: 0 }; // Default fallback to Green
+    }
+
+    function applyIntensity(colorObj, intensity) {
+        // Apply intensity scaling to RGB values
+        const r = Math.min(255, Math.round(colorObj.r * intensity));
+        const g = Math.min(255, Math.round(colorObj.g * intensity));
+        const b = Math.min(255, Math.round(colorObj.b * intensity));
+        return `rgb(${r},${g},${b})`;
+    }
+    
+    // Alias for readability
+    const getScaledColor = applyIntensity; 
   
-    // Convert Base dBf to Display Unit
+    // -------------------------------------------------------
+    // Unit Conversion Helpers
+    // -------------------------------------------------------
     function hfBaseToDisplay(baseHF) {
       const v = Number(baseHF);
       if (!isFinite(v)) return 0;
@@ -164,7 +193,6 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       return v;
     }
   
-    // Convert Base dBf to Percentage (0-100)
     function hfPercentFromBase(baseHF) {
       const v = Number(baseHF);
       if (!isFinite(v)) return 0;
@@ -176,7 +204,6 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       return (clamped / 90) * 100;
     }
   
-    // Build RF Scale labels
     function buildHFScale(unit) {
       const baseScale_dBuV = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0];
       const ssu = (unit || hfUnit || "").toLowerCase();
@@ -209,7 +236,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       });
     }
   
-    // Stereo audio context
+    // Stereo audio context variables
     let stereoAudioContext    = null;
     let stereoSourceNode      = null;
     let stereoSplitter        = null;
@@ -220,64 +247,143 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     let stereoAnimationId     = null;
     let stereoSetupIntervalId = null;
   
-    function stereoColorForPercent(p, totalSegments = 30) {
+    // ==========================================================
+    // METER COLOR LOGIC
+    // ==========================================================
+
+    // Helper to calculate color for Stereo Meters (L/R)
+    function getStereoColorForPercent(p, totalSegments = 30) {
       const i = Math.max(
         0,
         Math.min(totalSegments - 1, Math.round((p / 100) * totalSegments) - 1)
       );
       const topBandStart = totalSegments - 5;
+      
+      const cDanger = parseRgb(MeterColorDanger);
+      const cSafe = parseRgb(MeterColorSafe);
+
       if (i >= topBandStart) {
-        const red = Math.round((i / 10) * 125);
-        return `rgb(${red},0,0)`;
+        // Red/Danger Zone
+        const intensity = 0.8 + (0.2 * (i / totalSegments)); 
+        return getScaledColor(cDanger, intensity);
       } else {
-        const green = 100 + Math.round((i / totalSegments) * 155);
-        return `rgb(0,${green},0)`;
+        // Green/Safe Zone
+        // Start intensity higher (0.6) to avoid murky colors
+        const intensity = 0.6 + ((i / totalSegments) * 0.4); 
+        return getScaledColor(cSafe, intensity);
       }
     }
+
+    // Helper to calculate color for MPX Meter
+    function getMpxColorForIndex(i, totalSegments) {
+        const kHzMax       = 120;
+        const idxGreenMax  = Math.round((75 / kHzMax) * totalSegments);
+        const idxYellowMax = Math.round((80 / kHzMax) * totalSegments);
+        
+        const cSafe = parseRgb(MeterColorSafe);
+        const cWarning = parseRgb(MeterColorWarning);
+        const cDanger = parseRgb(MeterColorDanger);
+
+        if (i < idxGreenMax) {
+          // Safe Zone (Green)
+          const intensity = 0.4 + ((i / Math.max(1, idxGreenMax - 1)) * 0.4);
+          return applyIntensity(cSafe, intensity);
+
+        } else if (i < idxYellowMax) {
+          // Warning Zone (Yellow) - High intensity for visibility
+          const pos = (i - idxGreenMax) / Math.max(1, idxYellowMax - idxGreenMax);
+          const intensity = 1.2 + (0.2 * pos); 
+          return applyIntensity(cWarning, intensity);
+
+        } else {
+          // Danger Zone (Red)
+          const pos = (i - idxYellowMax) / Math.max(1, totalSegments - idxYellowMax);
+          const intensity = 0.8 + (0.2 * pos);
+          return applyIntensity(cDanger, intensity);
+        }
+    }
   
+    // Scale Labels
     const scales = {
       left: ["+5 dB","0","-5","-10","-15","-20","-25","-30","-35 dB"],
       right: [],
       stereoPilot: ["16","14","12","10","8","6","4","2","0 kHz"],
       hf: [],
-      rds: ["10","9","8","7","6","5","4","3","2","1","0 kHz"],
+      rds: ["16","14","12","10","8","6","4","2","0 kHz"],
       mpx: ["120","105","90","75","60","45","30","15","0 kHz"]
     };
   
+    // Generic Peak Updater
     function updatePeakValue(channel, current) {
+      if (!peaks[channel]) peaks[channel] = { value: 0, lastUpdate: Date.now() };
+      
       const p = peaks[channel];
-      if (!p) return;
       const now = Date.now();
-      if (current > p.value) {
+      
+      if (current >= p.value) {
+        // New peak: update immediately
         p.value = current;
         p.lastUpdate = now;
-      } else if (now - p.lastUpdate > PEAK_CONFIG.holdMs) {
-        p.value = p.value * PEAK_CONFIG.smoothing;
-        if (p.value < 0.5) p.value = 0;
+      } else {
+        // Drop: check hold time
+        if (now - p.lastUpdate > PEAK_CONFIG.holdMs) {
+          // Decay (drop slowly)
+          p.value = Math.max(current, p.value - 1.0); // Linearly drop
+        }
       }
     }
   
-    function setPeakSegment(meterEl, peak, meterId) {
+    // ==========================================================
+    // PEAK SEGMENT RENDERING
+    // ==========================================================
+    function setPeakSegment(meterEl, peakPercent, meterId) {
       const segments = meterEl.querySelectorAll(".segment");
       if (!segments.length) return;
   
+      // Remove old peak flag
       const prev = meterEl.querySelector(".segment.peak-flag");
-      if (prev) prev.classList.remove("peak-flag");
+      if (prev) {
+          prev.classList.remove("peak-flag");
+          prev.style.backgroundColor = ""; 
+          prev.style.boxShadow = "";
+          prev.style.opacity = "";
+      }
   
+      // Calculate index for the peak
       const idx = Math.max(
         0,
-        Math.min(segments.length - 1, Math.round((peak / 100) * segments.length) - 1)
+        Math.min(segments.length - 1, Math.round((peakPercent / 100) * segments.length) - 1)
       );
       const seg = segments[idx];
       if (!seg) return;
   
+      // Add peak class
       seg.classList.add("peak-flag");
   
+      // Determine color
+      let peakColor = "";
+
       if (meterId && (meterId.includes("left") || meterId.includes("right"))) {
-        seg.style.backgroundColor = stereoColorForPercent(peak, segments.length);
+        if (PeakMode === "fixed") {
+             peakColor = PeakColorFixed;
+        } else {
+             peakColor = getStereoColorForPercent(peakPercent, segments.length);
+        }
+      } 
+      else if (meterId && meterId.includes("mpx")) {
+        // MPX always dynamic, ignores PeakMode "fixed" setting
+        peakColor = getMpxColorForIndex(idx, segments.length);
+      }
+
+      // Apply Color Forcefully
+      if (peakColor) {
+         seg.style.setProperty("background-color", peakColor, "important");
       }
     }
   
+    // -------------------------------------------------------
+    // DOM Creation: createLevelMeter
+    // -------------------------------------------------------
     function createLevelMeter(id, label, container, scaleValues) {
       const levelMeter = document.createElement("div");
       levelMeter.classList.add("level-meter");
@@ -295,9 +401,9 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
         meterBar.appendChild(segment);
       }
   
-      if (id.includes("left") || id.includes("right")) {
+      if (id.includes("left") || id.includes("right") || id.includes("mpx")) {
         const marker = document.createElement("div");
-        marker.className = "peak-marker";
+        marker.className = "peak-marker"; 
         meterBar.appendChild(marker);
       }
   
@@ -335,7 +441,10 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       container.appendChild(levelMeter);
     }
   
-    function updateMeter(meterId, level) {
+    // ==========================================================
+    // MAIN UPDATE FUNCTION: updateMeter
+    // ==========================================================
+    function updateMeter(meterId, level, rawValueOverride = null) {
       const baseId = meterId;
       const targets = [];
       const el1 = document.getElementById(baseId);
@@ -343,6 +452,11 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       const el2 = document.getElementById(`mm-combo-${baseId}`);
       if (el2 && el2 !== el1) targets.push(el2);
       if (!targets.length) return;
+
+      // Parse Config Colors
+      const cDanger = parseRgb(MeterColorDanger);
+      const cSafe = parseRgb(MeterColorSafe);
+      const cWarning = parseRgb(MeterColorWarning);
 
       targets.forEach((meter) => {
         const meterId = baseId;
@@ -361,93 +475,107 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
         const activeCount = Math.round((safeLevel / 100) * segments.length);
     
         segments.forEach((seg, i) => {
+          // If disabled, gray out
           if (rdsDisabled || pilotDisabled || mpxDisabled) {
-            seg.style.backgroundColor = "#333";
+            seg.style.setProperty("background-color", "#333", "important");
             return;
           }
+          
+          // Skip the peak flag, we handle it later
+          if (seg.classList.contains("peak-flag")) return; 
     
+          let finalColor = "#333";
+
           if (i < activeCount) {
+            
+            // --- Stereo Meters (L/R) ---
             if (meterId.includes("left") || meterId.includes("right")) {
-              if (i >= segments.length - 5) {
-                const red = Math.round((i / 10) * 125);
-                seg.style.backgroundColor = `rgb(${red},0,0)`;
-              } else {
-                const green = 100 + Math.round((i / segments.length) * 155);
-                seg.style.backgroundColor = `rgb(0,${green},0)`;
-              }
+                // Gradient Green -> Red
+                if (i >= segments.length - 5) {
+                    finalColor = getScaledColor(cDanger, 1.0); // Danger
+                } else {
+                    const intensity = 0.4 + ((i / segments.length) * 0.4);
+                    finalColor = getScaledColor(cSafe, intensity); // Safe
+                }
+            
+            // --- Pilot Meter ---
             } else if (isPilot) {
               if (i < segments.length * 0.5) {
-                const green = 100 + Math.round((i / (segments.length * 0.5)) * 155);
-                seg.style.backgroundColor = `rgb(0,${green},0)`;
+                // Safe Zone (lower half)
+                const intensity = 0.4 + (i / (segments.length * 0.5)) * 0.4;
+                finalColor = applyIntensity(cSafe, intensity);
               } else {
+                // Danger Zone (upper half)
                 const pos = (i - segments.length * 0.5) / (segments.length * 0.5);
-                const red = 225 - Math.round(pos * 155);
-                seg.style.backgroundColor = `rgb(${red},0,0)`;
+                const intensity = 0.6 + (0.4 * pos);
+                finalColor = applyIntensity(cDanger, intensity);
               }
+            
+            // --- RDS Meter ---
             } else if (isRds) {
-              const rdsThresholdIndex1 = Math.round((2.5 / 10) * segments.length);
-              const rdsThresholdIndex2 = Math.round((3.5 / 10) * segments.length);
+              const rdsThresholdIndex1 = Math.round((2.5 / 16) * segments.length);
+              const rdsThresholdIndex2 = Math.round((3.5 / 16) * segments.length);
+              
               if (i < rdsThresholdIndex1) {
-                const green = 100 + Math.round((i / (segments.length * 0.5)) * 225);
-                seg.style.backgroundColor = `rgb(0,${green},0)`;
+                // Safe
+                const intensity = 0.4 + (i / rdsThresholdIndex1) * 0.4;
+                finalColor = applyIntensity(cSafe, intensity);
               } else if (i >= rdsThresholdIndex1 && i <= rdsThresholdIndex2) {
-                const yellowIntensity = 255 - Math.round(
-                  (i - rdsThresholdIndex1) / (rdsThresholdIndex2 - rdsThresholdIndex1) * 60
-                );
-                seg.style.backgroundColor =
-                  `rgb(${yellowIntensity + 150}, ${yellowIntensity}, 0)`;
+                // Warning (Yellow)
+                finalColor = applyIntensity(cWarning, 1.0); // Bright Yellow
               } else {
+                // Danger
                 const pos = (i - rdsThresholdIndex2) / (segments.length - rdsThresholdIndex2);
-                const red = 225 - Math.round(pos * 155);
-                seg.style.backgroundColor = `rgb(${red},0,0)`;
+                const intensity = 0.6 + (0.4 * pos);
+                finalColor = applyIntensity(cDanger, intensity);
               }
+
+            // --- MPX Meter ---
             } else if (isMpx) {
-              const kHzMax       = 120;
-              const idxGreenMax  = Math.round((75 / kHzMax) * segments.length);
-              const idxYellowMax = Math.round((80 / kHzMax) * segments.length);
-              if (i < idxGreenMax) {
-                const green = 100 + Math.round((i / Math.max(1, idxGreenMax - 1)) * 155);
-                seg.style.backgroundColor = `rgb(0,${green},0)`;
-              } else if (i < idxYellowMax) {
-                const pos = (i - idxGreenMax) / Math.max(1, idxYellowMax - idxGreenMax);
-                const yellowIntensity = 255 - Math.round(pos * 60);
-                seg.style.backgroundColor =
-                  `rgb(${yellowIntensity + 150}, ${yellowIntensity}, 0)`;
-              } else {
-                const pos = (i - idxYellowMax) / Math.max(1, segments.length - idxYellowMax);
-                const red = 225 - Math.round(pos * 155);
-                seg.style.backgroundColor = `rgb(${red},0,0)`;
-              }
+               finalColor = getMpxColorForIndex(i, segments.length); 
+
+            // --- HF / RF Meter ---
             } else if (isHf) {
               const hfThresholdIndex = Math.round((20 / 90) * segments.length);
+              
               if (i < hfThresholdIndex) {
+                // Danger (Low Signal)
                 const pos = i / hfThresholdIndex;
-                const red = 150 + Math.round(pos * 185);
-                seg.style.backgroundColor = `rgb(${red},0,0)`;
+                const intensity = 0.6 + (0.4 * pos);
+                finalColor = applyIntensity(cDanger, intensity);
               } else {
-                const green = 100 + Math.round((i / segments.length) * 155);
-                seg.style.backgroundColor = `rgb(0,${green},0)`;
+                // Safe (Good Signal)
+                const intensity = 0.4 + ((i / segments.length) * 0.4);
+                finalColor = applyIntensity(cSafe, intensity);
               }
+
+            // --- Default Fallback ---
             } else {
               if (i < segments.length * 0.6) {
-                seg.style.backgroundColor = "#4caf50";
+                finalColor = applyIntensity(cSafe, 1.0);
               } else if (i < segments.length * 0.8) {
-                seg.style.backgroundColor = "#ff9800";
+                finalColor = applyIntensity(cWarning, 1.0);
               } else {
-                seg.style.backgroundColor = "#f44336";
+                finalColor = applyIntensity(cDanger, 1.0);
               }
             }
-          } else {
-            seg.style.backgroundColor = "#333";
-          }
+          } 
+
+          // Apply Color using !important to override external styles
+          seg.style.setProperty("background-color", finalColor, "important");
         });
     
+        // Update Peak Indicators
         if (meterId.includes("left") || meterId.includes("right")) {
           const channel = meterId.includes("left") ? "left" : "right";
           updatePeakValue(channel, safeLevel);
           setPeakSegment(meter, peaks[channel].value, meterId);
+        } else if (isMpx) {
+          updatePeakValue("mpx", safeLevel); 
+          setPeakSegment(meter, peaks.mpx.value, meterId); 
         }
         
+        // --- TEXT VALUE DISPLAY UPDATE ---
         const wrapper = meter.closest('.meter-wrapper');
         if (wrapper) {
           const valDisp = wrapper.querySelector('.value-display');
@@ -464,17 +592,22 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
                const dBuV_from_percent = (safeLevel / 100) * 90;             
                let baseHF = dBuV_from_percent + 10.875;
                let displayValue = hfBaseToDisplay(baseHF);
-               const u = (hfUnit || "").toLowerCase();
                text = displayValue.toFixed(1);
 			   
+            } else if (isPilot && rawValueOverride !== null) {
+               text = rawValueOverride.toFixed(1);
             } else if (isPilot) {
                const khz = (safeLevel / 100) * 16.0;
                text = khz.toFixed(1);
     
+            } else if (isRds && rawValueOverride !== null) {
+               text = rawValueOverride.toFixed(1);
             } else if (isRds) {
-               const khz = (safeLevel / 100) * 10.0;
+               const khz = (safeLevel / 100) * 16.0;
                text = khz.toFixed(1);
     
+            } else if (isMpx && rawValueOverride !== null) {
+               text = rawValueOverride.toFixed(1);
             } else if (isMpx) {
                const khz = (safeLevel / 100) * 120.0;
                text = khz.toFixed(1);
@@ -487,13 +620,12 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
                  text = "-";
             }
     
-            // Throttle text updates
             const now = Date.now();
             let updateInterval = 50; 
             
-            // Slower updates for RDS/MPX to prevent jitter
-            if (isRds || isMpx) {
-                updateInterval = 150; 
+            // Slower Text Update Rate for Stability (1s)
+            if (isRds || isMpx || isPilot) {
+                updateInterval = 1000; 
             }
 
             const lastUpdate = parseInt(valDisp.getAttribute("data-last-update") || "0");
@@ -507,6 +639,9 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
         });
       }
     
+      // ==========================================================
+      // MPX DATA HANDLING
+      // ==========================================================
       function handleMpxArray(data) {
         if (!data || (!Array.isArray(data) && !(data instanceof Float32Array) && !(data instanceof Uint8Array))) {
           return;
@@ -566,234 +701,74 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
       }
       
     // ---------------------------------------------------------------
-    // RDS Logic - Additive calibration & Ballistics
+    // RDS Logic
     // ---------------------------------------------------------------
-    let rdsSigSmooth   = 0;
-    let rdsNoiseSmooth = 0;
-    let rdsDisplay     = 0;
-    let rdsInitialized = false;
-    const rdsMedianBuf = [];
-    const MEDIAN_LEN   = 25;
-
-    function median(arr) {
-    const a = arr.slice().sort((x, y) => x - y);
-    const m = Math.floor(a.length / 2);
-    return a.length % 2 ? a[m] : 0.5 * (a[m - 1] + a[m]);
-    }
-
     function updateRdsFromSpectrum() {
-    if (!websocketRdsActive || !RDS_ENABLED) {
-        updateMeter("rds-meter", 0);
-        levels.rds = 0;
-        rdsMedianBuf.length = 0;
-        isRdsGateOpen = false;
-        rdsInitialized = false;
-        return;
-    }
-
-    let devKHz = 0;
-    let gateOpen = false;
-
-    // Time-Domain-only logic
-    if (rdsPeakVal === 0 || pilotPeakVal === 0) {
-        devKHz = 0;
-        gateOpen = false;
-    } else {
-        const rawDevKHz = rdsPeakVal
-        
-        const isStrongSignal = rawDevKHz > 0.8;
-        
-        if (isStrongSignal) {
-        devKHz = rawDevKHz;
-        if (devKHz > 0.25) gateOpen = true; 
+        if (!websocketRdsActive || !RDS_ENABLED) {
+            updateMeter("rds-meter", 0, 0);
+            levels.rds = 0;
+            rdsDisplayValue = 0;
+            return;
         }
-    }
 
-    isRdsGateOpen = gateOpen;
-    if (!gateOpen) devKHz = 0;
+        let devKHz = rdsPeakVal;
+        if (devKHz < 0) devKHz = 0;
 
-    if (devKHz === 0) {
-        rdsMedianBuf.length = 0;
-        rdsDisplay = 0;
-        updateMeter("rds-meter", 0);
-        levels.rds = 0;
-        return;
-    }
+        rdsDisplayValue = rdsDisplayValue * 0.8 + devKHz * 0.2;
 
-    const RDS_SCALE_MAX_KHZ = 10.0;
-    let percent = Math.max(0, Math.min(100, (devKHz / RDS_SCALE_MAX_KHZ) * 100));
+        const RDS_SCALE_MAX_KHZ = 16.0;
+        let percent = Math.max(0, Math.min(100, (rdsDisplayValue / RDS_SCALE_MAX_KHZ) * 100));
 
-    // Median filtering
-    rdsMedianBuf.push(percent);
-    if (rdsMedianBuf.length > MEDIAN_LEN) rdsMedianBuf.shift();
-
-    let targetPercent =
-        rdsMedianBuf.length < MEDIAN_LEN ? Math.min(...rdsMedianBuf) : median(rdsMedianBuf);
-
-    // Jump-start
-    if (!rdsInitialized && targetPercent > 0) {
-        rdsDisplay = targetPercent;
-        rdsInitialized = true;
-    }
-
-    // Very slow ballistics
-    const ATTACK = 0.02;  
-    const RELEASE = 0.02; 
-    const DEADBAND_PCT = 0.4;
-
-    if (Math.abs(targetPercent - rdsDisplay) < DEADBAND_PCT) {
-        targetPercent = rdsDisplay;
-    }
-
-    if (targetPercent > rdsDisplay) {
-        rdsDisplay = rdsDisplay * (1 - ATTACK) + targetPercent * ATTACK;
-    } else {
-        rdsDisplay = rdsDisplay * (1 - RELEASE) + targetPercent * RELEASE;
-    }
-
-    updateMeter("rds-meter", rdsDisplay);
-    levels.rds = rdsDisplay;
+        updateMeter("rds-meter", percent, devKHz);
+        levels.rds = percent;
     }
     
       // ---------------------------------------------------------------
-      // Pilot Logic - Additive calibration
+      // Pilot Logic
       // ---------------------------------------------------------------
       function updatePilotFromSpectrum() {
         if (!PILOT_ENABLED) {
-          pilotSmooth = 0;
+          pilotDisplayValue = 0;
           levels.stereoPilot = 0;
-          updateMeter("stereo-pilot-meter", 0);
+          updateMeter("stereo-pilot-meter", 0, 0);
           return;
         }
         
-        let devKHz = 0;
-        let gateOpen = false;
+        let devKHz = pilotPeakVal;
+        if (devKHz < 0) devKHz = 0;
+        
+        pilotDisplayValue = pilotDisplayValue * 0.8 + devKHz * 0.2;
 
-        if (pilotPeakVal === 0) {
-            devKHz = 0;
-            gateOpen = false;
-            pilotSmooth = 0; 
-        } else {
-            devKHz = pilotPeakVal
-            if (devKHz > 0.5) gateOpen = true;
-        }
-        
-        if (!gateOpen) devKHz = 0;
-        
-        // Squelch
-        if (devKHz === 0) {
-            updateMeter("stereo-pilot-meter", 0);
-            levels.stereoPilot = 0;
-            pilotSmooth = 0;
-            
-            levels.rds = 0;
-            levels.mpxTotal = 0;
-            updateMeter("rds-meter", 0);
-            updateMeter("mpx-meter", 0);
-            
-            rdsDisplay = 0; rdsLongPrev = 0; rdsMedianBuf.length = 0;
-            mpxDisplayValue = 0; mpxPeakHold = 0; mpxInputSmooth = 0;
-            
-            return; 
-        }
-    
         const PILOT_SCALE_MAX_KHZ = 16.0;
-        let percent = (devKHz / PILOT_SCALE_MAX_KHZ) * 100;
-    
+        let percent = (pilotDisplayValue / PILOT_SCALE_MAX_KHZ) * 100;
         if (percent > 100) percent = 100;
         if (percent < 0)   percent = 0;
     
-        if (percent > pilotSmooth) {
-            pilotSmooth = pilotSmooth * 0.80 + percent * 0.20;
-        } else {
-            pilotSmooth = pilotSmooth * 0.95 + percent * 0.05;
-        }
-    
-        levels.stereoPilot = pilotSmooth;
-        updateMeter("stereo-pilot-meter", pilotSmooth);
-    
-        if (ENABLE_DEBUG && Date.now() - lastDebugTime > DEBUG_INTERVAL_MS) {
-          console.log(`%c[PILOT]`, 'color: cyan; font-weight: bold;');
-          console.table({
-              "Mode": "TimeDomain (Exclusive)",
-              "Raw": pilotPeakVal.toFixed(6),
-              "Result Dev (kHz)": devKHz.toFixed(3)
-          });
-        }
+        levels.stereoPilot = percent;
+        updateMeter("stereo-pilot-meter", percent, devKHz);
       }
 
     // ---------------------------------------------------------------
-    // MPX Total Logic - Additive calibration & Ballistics
+    // MPX Total Logic (FIXED: Disconnected from RDS Active state)
     // ---------------------------------------------------------------
-    let mpxPeakHold      = 0;
-    let mpxPeakHoldTimer = 0;
-    let mpxDisplayValue  = 0;
-    const MPX_PEAK_HOLD_MS   = 80;
-    const MPX_OVERSHOOT_KHZ  = 4;
-
-    let mpxInputSmooth = 0;
-
     function updateMpxTotalFromSpectrum() {
-    if (!MPX_ENABLED || !websocketRdsActive) {
-        mpxPeakHold = 0;
-        mpxDisplayValue = 0;
-        levels.mpxTotal = 0;
-        mpxInputSmooth = 0;
-        updateMeter("mpx-meter", 0);
-        return;
-    }
+      if (!MPX_ENABLED) {
+          mpxDisplayValue = 0;
+          levels.mpxTotal = 0;
+          updateMeter("mpx-meter", 0, 0);
+          return;
+      }
 
-    if (mpxPeakVal === 0 || pilotPeakVal === 0) {
-        mpxInputSmooth = 0;
-        mpxDisplayValue = 0;
-        mpxPeakHold = 0;
-        updateMeter("mpx-meter", 0);
-        levels.mpxTotal = 0;
-        return;
-    }
+      let devKHz = mpxPeakVal; 
+      if (devKHz < 0) devKHz = 0;
+      if (devKHz > 120) devKHz = 120;
 
-    let devKHz = mpxPeakVal
+      mpxDisplayValue = mpxDisplayValue * 0.8 + devKHz * 0.2;
 
-    devKHz = Math.max(0, Math.min(120, devKHz));
+      const percent = Math.min(100, Math.max(0, (mpxDisplayValue / 120) * 100));
+      levels.mpxTotal = percent;
 
-    // Input smoothing
-    if (mpxInputSmooth < 1.0 && devKHz > 8.0) {
-        mpxInputSmooth = devKHz;
-    } else if (devKHz > mpxInputSmooth) {
-        mpxInputSmooth = mpxInputSmooth * 0.88 + devKHz * 0.12;
-    } else {
-        mpxInputSmooth = mpxInputSmooth * 0.90 + devKHz * 0.10;
-    }
-
-    const targetVal = mpxInputSmooth;
-    const now = Date.now();
-
-    // Display Ballistics
-    if (targetVal > mpxDisplayValue) {
-        mpxDisplayValue += (targetVal - mpxDisplayValue) * 0.18;
-        mpxPeakHold = mpxDisplayValue;
-        mpxPeakHoldTimer = now;
-    } else if (targetVal < mpxDisplayValue) {
-        const bigDrop = targetVal < mpxDisplayValue * 0.7;
-        if (bigDrop) {
-        mpxDisplayValue = targetVal;
-        } else if (now - mpxPeakHoldTimer < MPX_PEAK_HOLD_MS) {
-        mpxDisplayValue = mpxPeakHold;
-        } else {
-        mpxDisplayValue = mpxDisplayValue * 0.85;
-        if (mpxDisplayValue < targetVal) mpxDisplayValue = targetVal;
-        }
-    }
-
-    // Overshoot Limit
-    const maxOvershoot = Math.max(MPX_OVERSHOOT_KHZ, targetVal * 0.10);
-    if (mpxDisplayValue > targetVal + maxOvershoot) {
-        mpxDisplayValue = targetVal + maxOvershoot;
-    }
-
-    const percent = Math.min(100, Math.max(0, (mpxDisplayValue / 120) * 100));
-    levels.mpxTotal = percent;
-    updateMeter("mpx-meter", percent);
+      updateMeter("mpx-meter", percent, devKHz);
     }
       
         // ---------------------------------------------------------------
@@ -888,8 +863,8 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
               if (d > maxR) maxR = d;
             }
       
-            let levelL = ((maxL / 128) * 100) * stereoBoost;
-            let levelR = ((maxR / 128) * 100) * stereoBoost;
+            let levelL = ((maxL / 128) * 100) * StereoBoost;
+            let levelR = ((maxR / 128) * 100) * StereoBoost;
       
             levelL = Math.min(100, Math.max(0, levelL));
             levelR = Math.min(100, Math.max(0, levelR));
@@ -915,7 +890,11 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           const protocol      = currentURL.protocol === "https:" ? "wss:" : "ws:";
           const webserverURL  = currentURL.hostname;
           const websocketURL  = `${protocol}//${webserverURL}:${webserverPort}/data_plugins`;
-      
+
+          if (mpxSocket && (mpxSocket.readyState === WebSocket.OPEN || mpxSocket.readyState === WebSocket.CONNECTING)) {
+              return;
+          }
+
           if (mpxSocket) {
               try {
                   mpxSocket.close();
@@ -924,8 +903,8 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           }
 
           const socket = new WebSocket(websocketURL);
-          mpxSocket = socket; // Save reference
-      
+          mpxSocket = socket;
+
           socket.onmessage = (event) => {
             let message;
             try {
@@ -933,34 +912,48 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
             } catch {
               return;
             }
-      
+
             if (Array.isArray(message)) {
               handleMpxArray(message);
               return;
             }
-      
+
             if (!message || typeof message !== "object") return;
             const type = message.type ? String(message.type).toLowerCase() : "";
-      
+
             if (type === "mpx") {
               if (typeof message.peak === "number") {
                   mpxPeakVal = message.peak;
                   pilotPeakVal = (typeof message.pilotKHz === "number") ? message.pilotKHz : (message.pilot || 0);
                   rdsPeakVal   = (typeof message.rdsKHz === "number") ? message.rdsKHz : (message.rds || 0);
-                  noiseFloorVal = message.noise || 0.000001; 
+                  noiseFloorVal = message.noise || 0.000001;
                   hasTimeDomainData = true;
               } else {
                   hasTimeDomainData = false;
               }
-              
+
               handleMpxArray(message.value);
               return;
             }
           };
+
+          socket.onclose = () => {
+              mpxSocket = null;
+          };
+        }
+
+        function closeMetricsWebSocket() {
+          if (mpxSocket) {
+              try {
+                  mpxSocket.close();
+              } catch(e) {
+                  console.error("[MetricsMeters] Error closing WebSocket:", e);
+              }
+              mpxSocket = null;
+          }
         }
       
         function initMeters(levelMeterContainer) {
-          // Reset all values on start
           if (window.MetricsMeters && typeof window.MetricsMeters.resetValues === "function") {
               window.MetricsMeters.resetValues();
           }
@@ -1036,35 +1029,32 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
           levels,
           updateMeter,
           initMeters,
-          
-          // Enhanced Reset function
+          cleanup: closeMetricsWebSocket,
+          createWebSocket: setupMetricsWebSocket,
+
           resetValues() {
               mpxDisplayValue = 0;
-              mpxPeakHold = 0;
-              mpxInputSmooth = 0;
+              rdsDisplayValue = 0;
+              pilotDisplayValue = 0;
+              
               levels.mpxTotal = 0;
               levels.stereoPilot = 0;
               levels.rds = 0;
               pilotSmooth = 0;
-              
-              // RDS Reset
-              rdsDisplay = 0;
-              rdsLongPrev = 0;
-              rdsSigSmooth = 0;
-              rdsNoiseSmooth = 0;
-              rdsInitialized = false;
-              rdsMedianBuf.length = 0;
-              isRdsGateOpen = false;
 
               // Server Peaks Reset
               mpxPeakVal = 0;
               pilotPeakVal = 0;
               rdsPeakVal = 0;
+              
+              peaks.mpx.value = 0; 
+              peaks.left.value = 0;
+              peaks.right.value = 0;
           },
 
           setStereoStatus(isActive) { websocketStereoActive = !!isActive; },
           setRdsStatus(isActive) { websocketRdsActive = !!isActive; },
-          getStereoBoost() { return stereoBoost; },
+          getStereoBoost() { return StereoBoost; },
           setStereoBoost(value) {},
           setHF(baseValue) {
             const v = Number(baseValue);

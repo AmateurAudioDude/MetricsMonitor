@@ -1,39 +1,60 @@
-///////////////////////////////////////////////////////////////
-//                                                           //
-//  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.4)  //
-//                                                           //
-//  by Highpoint               last update: 20.12.2025       //
-//                                                           //
-//  Thanks for support by                                    //
-//  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
-//                                                           //
-//  https://github.com/Highpoint2000/metricsmonitor          //
-//                                                           //
-///////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+//                                                             //
+//  METRICSMONITOR CLIENT SCRIPT FOR FM-DX-WEBSERVER (V1.5)    //
+//                                                             //
+//  by Highpoint               last update: 04.01.2026         //
+//                                                             //
+//  Thanks for support by                                      //
+//  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude        //
+//                                                             //
+//  https://github.com/Highpoint2000/metricsmonitor            //
+//                                                             //
+/////////////////////////////////////////////////////////////////
 
 (() => {
-const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
-const CANVAS_SEQUENCE = [4,2];    // Do not touch - this value is automatically updated via the config file
 const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const MPXboost = 0;    // Do not touch - this value is automatically updated via the config file
 const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
-const fftSize = 1024;    // Do not touch - this value is automatically updated via the config file
-const SpectrumAverageLevel = 15;    // Do not touch - this value is automatically updated via the config file
-const minSendIntervalMs = 30;    // Do not touch - this value is automatically updated via the config file
-const pilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const mpxCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const rdsCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const CurveYOffset = -40;    // Do not touch - this value is automatically updated via the config file
-const CurveYDynamics = 1.9;    // Do not touch - this value is automatically updated via the config file
-const stereoBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const eqBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
+const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
+const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
+const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const CANVAS_SEQUENCE = [2,4];    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
 const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
+const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
+const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
+const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
+const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
 
-// Configuration constants - updated automatically via config file
+  // =========================================================
+  // Plugin version and update check configuration
+  // =========================================================
+  const plugin_version = "1.5";
+  const updateInfo = true;
+
+  const plugin_name = "MetricsMonitor";
+  const plugin_path = "https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/";
+  const plugin_JSfile = "main/plugins/MetricsMonitor/metricsmonitor.js";
+
+  const CHECK_FOR_UPDATES = updateInfo;
+  const pluginSetupOnlyNotify = true;
+  const pluginName = plugin_name;
+  const pluginHomepageUrl = "https://github.com/Highpoint2000/MetricsMonitor/releases";
+  const pluginUpdateUrl = plugin_path + plugin_JSfile;
+
 
   // ---------------------------------------------------------
   // Exposed configuration for consumption by sub-modules
@@ -43,20 +64,21 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     CANVAS_SEQUENCE: Array.isArray(CANVAS_SEQUENCE) ? CANVAS_SEQUENCE : [0],
 
     sampleRate,
-    MPXboost,
+    MeterInputCalibration,
     MPXmode,
     MPXStereoDecoder,
     MPXInputCard,
     fftSize,
-    SpectrumAverageLevel,
-    minSendIntervalMs,
-    pilotCalibration,
-    mpxCalibration,
-    rdsCalibration,
-    CurveYOffset,
-    CurveYDynamics,
-    stereoBoost,
-    eqBoost,
+    SpectrumAttackLevel,
+    SpectrumDecayLevel,
+    SpectrumSendInterval,
+    MeterPilotCalibration,
+    MeterMPXCalibration,
+    MeterRDSCalibration,
+    SpectrumYOffset,
+    SpectrumYDynamics,
+    StereoBoost,
+    AudioMeterBoost,
     LockVolumeSlider,
   };
 
@@ -75,7 +97,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
   const NEED_MODULE_4 = Array.isArray(CONFIG.MODULE_SEQUENCE) && CONFIG.MODULE_SEQUENCE.some(v => Number(v) === 4);
 
   // Map configuration to specific functional requirements
-  const NEED_EQUALIZER       = NEED_MODULE_0;                    
+  const NEED_AudioMeter       = NEED_MODULE_0;                    
   const NEED_METERS          = NEED_MODULE_1 || NEED_CANVAS_2;    
   const NEED_ANALYZER        = NEED_MODULE_2 || NEED_CANVAS_2;    
   const NEED_SIGNAL_METER    = NEED_MODULE_3 || NEED_MODULE_4 || NEED_CANVAS_4; 
@@ -122,22 +144,6 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
   };
 
   mmLog("log", "Logger initialized");
-
-  // =========================================================
-  // Plugin version and update check configuration
-  // =========================================================
-  const plugin_version = "1.4";
-  const updateInfo = true;
-
-  const plugin_name = "MetricsMonitor";
-  const plugin_path = "https://raw.githubusercontent.com/Highpoint2000/MetricsMonitor/";
-  const plugin_JSfile = "main/plugins/MetricsMonitor/metricsmonitor.js";
-
-  const CHECK_FOR_UPDATES = updateInfo;
-  const pluginSetupOnlyNotify = true;
-  const pluginName = plugin_name;
-  const pluginHomepageUrl = "https://github.com/Highpoint2000/MetricsMonitor/releases";
-  const pluginUpdateUrl = plugin_path + plugin_JSfile;
 
   // =========================================================
   // Mode handling (Panel Modules)
@@ -269,7 +275,7 @@ const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatic
     meters.innerHTML = "";
     mmLog("log", "MODE = " + mode);
 
-    if (mode === 0) window.MetricsEqualizer?.init("level-meter-container");
+    if (mode === 0) window.MetricsAudioMeter?.init("level-meter-container");
     else if (mode === 1) {
       if (window.MetricsMeters && typeof window.MetricsMeters.resetValues === "function") {
         window.MetricsMeters.resetValues();
@@ -500,12 +506,72 @@ function syncTextWebSocketMode(isInitial) {
 
 
   // =========================================================
+  // Cleanup function for current mode
+  // =========================================================
+  function cleanupCurrentMode() {
+    //console.log('mode:', mode, ' c-mode:', activeCanvasMode, ' c-visible:', isCanvasVisible);
+    if (!isCanvasVisible || activeCanvasMode !== 2) {
+      if (mode === 1 && window.MetricsAnalyzer?.cleanup) window.MetricsAnalyzer.cleanup();
+      if (mode === 2 && window.MetricsMeters?.cleanup) window.MetricsMeters.cleanup();
+      if (mode !== 1 && mode !== 2 && window.MetricsAnalyzer?.cleanup && window.MetricsMeters?.cleanup) {
+        window.MetricsAnalyzer.cleanup();
+        window.MetricsMeters.cleanup();
+      }
+    } else if (isCanvasVisible && activeCanvasMode === 2) {
+      if (mode !== 1) window.MetricsMeters?.createWebSocket();
+      if (mode !== 2) {
+        // --- 1. Analyzer Init ---
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.init === "function") {
+          window.MetricsAnalyzer.init("mm-combo-analyzer-container", {
+            instanceKey: "combo-main",
+            embedded: true,
+            useLegacyCss: false
+          });
+
+          // Safe Resize
+          setTimeout(() => {
+            const wrap = document.getElementById("mm-combo-analyzer-container");
+            const canvas = wrap ? (wrap.querySelector("canvas") || document.querySelector("#mm-combo-analyzer-container canvas")) : null;
+
+            if (wrap && canvas) {
+                wrap.style.border = "none";
+                const safeResize = () => {
+                    const width = wrap.clientWidth;
+                    const height = wrap.clientHeight;
+                    if (!width || width === 0) { window.requestAnimationFrame(safeResize); return; }
+                    const dpr = window.devicePixelRatio || 1;
+                    if (canvas.width !== Math.floor(width * dpr)) {
+                         canvas.width = Math.floor(width * dpr);
+                         canvas.height = Math.floor(height * dpr);
+                         const ctx = canvas.getContext("2d");
+                         if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                         try {
+                            if (typeof Chart !== "undefined" && Chart.getChart) {
+                                const ch = Chart.getChart(canvas);
+                                if (ch) ch.resize();
+                            }
+                        } catch(e){}
+                    }
+                };
+                window.requestAnimationFrame(safeResize);
+                const resizeObserver = new ResizeObserver(() => { window.requestAnimationFrame(safeResize); });
+                resizeObserver.observe(wrap);
+            } 
+          }, 200); 
+        }
+      }
+
+    }
+  }
+
+  // =========================================================
   // Switching & Panel Logic
   // =========================================================
   function switchModeWithFade(nextMode) {
     const meters = document.getElementById("level-meter-container");
     if (!meters) {
       mode = nextMode;
+      cleanupCurrentMode();  // Cleanup before switching
       buildMeters();
       syncTextWebSocketMode(false);
       return;
@@ -522,6 +588,7 @@ function syncTextWebSocketMode(isInitial) {
 
     setTimeout(() => {
       mode = nextMode;
+      cleanupCurrentMode();  // Cleanup before switching
       buildMeters();
       syncTextWebSocketMode(false);
 
@@ -979,6 +1046,8 @@ ensureTextSocket().then(() => {
 
     isCanvasVisible = !isCanvasVisible;
 
+    cleanupCurrentMode();  // Cleanup before switching on canvas open/close
+
     const button = document.getElementById("mpx-signal-toggle-button");
     const mmContainerCombo = document.getElementById("mm-mpx-combo-flex");
     const mmContainerSignal = document.getElementById("mm-signal-analyzer-flex");
@@ -1068,7 +1137,7 @@ ensureTextSocket().then(() => {
       "css/metricsmonitor_header.css",
 
       NEED_METERS ? "css/metricsmonitor_meters.css" : null,
-      NEED_EQUALIZER ? "css/metricsmonitor-equalizer.css" : null,
+      NEED_AudioMeter ? "css/metricsmonitor-audiometer.css" : null,
       NEED_ANALYZER ? "css/metricsmonitor-analyzer.css" : null,
       NEED_SIGNAL_METER ? "css/metricsmonitor-signalmeter.css" : null,
       NEED_SIGNAL_ANALYZER ? "css/metricsmonitor-signal-analyzer.css" : null
@@ -1081,7 +1150,7 @@ ensureTextSocket().then(() => {
       "js/metricsmonitor-header.js",
 
       NEED_METERS ? "js/metricsmonitor-meters.js" : null,
-      NEED_EQUALIZER ? "js/metricsmonitor-equalizer.js" : null,
+      NEED_AudioMeter ? "js/metricsmonitor-audiometer.js" : null,
       NEED_ANALYZER ? "js/metricsmonitor-analyzer.js" : null,
       NEED_SIGNAL_METER ? "js/metricsmonitor-signalmeter.js" : null,
       NEED_SIGNAL_ANALYZER ? "js/metricsmonitor-signal-analyzer.js" : null
@@ -1172,6 +1241,8 @@ ensureTextSocket().then(() => {
       if (targetMode === 4 && window.mmTriggerResizeSignal) window.mmTriggerResizeSignal();
       
       setTimeout(() => { isCanvasSwitching = false; }, FADE_MS);
+
+      cleanupCurrentMode();  // Cleanup before switching on canvas mode switch
     }, FADE_MS);
   }
 
@@ -1558,6 +1629,13 @@ ensureTextSocket().then(() => {
 	  
 	  #mm-combo-meters-col .label { display: block !important; opacity: 1 !important; visibility: visible !important; pointer-events: none !important; margin-top: 5px !important; line-height: 1.0 !important; font-size: 10px !important; }
       
+      /* V1.8 FIX: Transparent gaps that survive zooming */
+      #mm-combo-meters-col .meter-bar .segment {
+        border-bottom: 1px solid transparent !important; /* The gap space */
+        background-clip: padding-box !important;         /* Cut color at border */
+        margin-bottom: 0 !important;                     /* No margin needed */
+        box-sizing: border-box;                          /* Height includes border */
+      }
 
       /* HIDE UNUSED ELEMENTS */
       #mm-combo-meters-inner .stereo-group, 

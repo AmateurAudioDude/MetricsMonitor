@@ -9,14 +9,14 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 
 
-## v1.4
+## v1.5
 
-- Added button with additional MPX/Signal Canvas display (see Configuration Options)
-- Added improved FFT support for modern CPUs (see Configuration Options - thanks to AmateurAudioDude)
 - Improved PILOT/MPX/RDS detection
-- Added startup activation for the Spectrum Graph plugin
-- Added MPXBoost to enhance the MPX spectrum (see Configuration Options)
-- ESP32 MPX Auto Switching synchronized with Headless TEF command
+- Corrected faulty spectrum display on smartphone screen
+- Separate input control added for spectrum and meter display
+- Added custom color adjustments for meter displays and highest peak
+- Adjusting the RDS meter scale to the pilot display
+- Configuration variables restructured for improved clarity (see configuraion options)
 
 ## Important note for this version: 
 - After installation, please set all calibration values ​​to 0 and then readjust them by entering the values ​​to be added or subtracted in kHz.
@@ -40,26 +40,45 @@ https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF
 
 The following variables can be changed in the metricsmonitor.json config file:
 
+    /* Audio & MPX Hardware Settings */
     "sampleRate": 48000,             //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
-    "MPXboost": 0,                   //  Increase if necessary to enhance the MPX spectrum (default is 0). 
     "MPXmode": "auto",               //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer and signal meter module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
     "MPXStereoDecoder": "off",	     //  Set the switch to "on" if you are decoding the stereo signal from MPX with a stereo decoder. This will enable the optical mono/stereo indicator to function when MPXmode is set to "on". The default setting is "off".          
     "MPXInputCard": "",              //  Configure the sound input exclusive to MPX (e.g., for Linux: "plughw:CARD=Device" or Windows: "Microphone (HD USB Audio Device)")
+
+    /* Calibration Offsets (Meters) */
+    "MeterInputCalibration": 0,      //  Increase or decrease the value as needed to adjust the input for the MPX gauges (Pilot, MPX, RDS). The default value is 0. 
+    "MeterPilotCalibration": 0,      //  Calibrate the +/- level value for the Pilot level indicator (default = 0)
+    "MeterMPXCalibration": 0,        //  Calibrate the +/- level value for the MPX level indicator (default = 0)
+    "MeterRDSCalibration": 0,        //  Calibrate the +/- level value for the RDS level indicator (default = 0)
+
+    /* FFT / Spectrum Settings */
     "fftLibrary": "fft-js",          //  For modern CPUs, change the desired FFT library to "pffft.wasm" (6-16x faster). "pffft.wasm" requires Node.js v14+ and works best with 64-bit operating systems / Node.js v16.4+ for SIMD support / x86-64, Apple Silicon, RPi 4/5. Default is "fft-js".
-	"fftSize": 1024,                 //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 1024.
-	"SpectrumAverageLevel": 15,      //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
-	"minSendIntervalMs": 30,         //  Cchange the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
-    "pilotCalibration": 0,           //  Calibrate the +/- level value for the Pilot level indicator (default = 0)
-    "mpxCalibration": 0,             //  Calibrate the +/- level value for the MPX level indicator (default = 0)
-    "rdsCalibration": 0,             //  Calibrate the +/- level value for the RDS level indicator (default = 0)
-    "Curve-Y-Offset": -40,           //  Set the +/- level value for the analyzing curve offset (default = -40)
-    "Curve-Y-Dynamics": 1.9,         //  Set the +/- level value for the analyzing curve dynamic (peak indication / default = 1.9)
-	"stereoBoost": 1,                //  If the audio signal is too weak, a gain factor for the audio display can be set here (1 - default).
-    "eqBoost": 1,                    //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
+	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
+
+    /* Spectrum Visuals */
+	"SpectrumAttackLevel": 3,      
+    "SpectrumDecayLevel": 15;        //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
+	"SpectrumSendInterval": 30,      //  Cchange the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
+    "SpectrumYOffset": -40,          //  Set the +/- level value for the analyzing curve offset (default = -40)
+    "SpectrumYDynamics": 2,          //  Set the +/- level value for the analyzing curve dynamic (peak indication / default = 2)
+
+    /* Meter Gains */
+	"StereoBoost": 2,                //  If the audio signal is too weak, a gain factor for the audio display can be set here (2 - default).
+    "AudioMeterBoost": 1,            //  If the audio signal is too weak, a gain factor for the equalizer display can be set here (1 - default).
+
+    /* Layout & UI */
     "MODULE_SEQUENCE": "1,2,0,3,4"   //  Set the module display and order: 0 - Audio + Equalizer / 1 - Audio + PILOT/MPX/RDS / 2 - Spectrum Analyzer / 3 - Audio + Signal Strength / 4 - Signal Analyzer. Single values ​​or comma-separated values ​​can be entered: "0,4" or "4" etc. ("1,2,0,4" - default).
 	"CANVAS_SEQUENCE": "2,4",        //  Set the module display and order: 2 - PILOT/MPX/RDS + Spectrum Analyzer / 4 - Signal Strength + Signal Analyzer. Single values ​​or comma-separated values ​​can be entered: "2,4", "4,2", "4" or "2". ("2,4" - default). An empty field hides the MPX/Signal button.
     "LockVolumeSlider": true         //  The locked volume control in the browser can be unlocked if needed, but this will affect the measured values ​​(default is true).
 	"EnableSpectrumOnLoad": false    //  Set to true for automatic startup activation for the Spectrum Graph plugin (default is false).
+
+    /* Colors & Peaks */
+    "MeterColorSafe": "rgb(0, 255, 0)";       // Change the color here for the safe range of the meter displays. The default is "rgb(0, 255, 0)".
+    "MeterColorWarning": "rgb(255, 255,0)";   // Change the color here for the warning range of the meter displays. The default is "rgb(255, 255, 0)".
+    "MeterColorDanger": "rgb(255, 0, 0)";     // Change the color here for the danger range of the meter displays. The default is "rgb(255, 0, 0)".
+    "PeakMode": "dynamic";                    // To set a custom color for the highest peak, change the setting to "fixed". The default is "dynamic".
+    "PeakColorFixed": "rgb(251, 174, 38)";    // Define a custom color here for the highest peak display. The default is "rgb(251, 174, 38)".
 
 After making changes to the metricsmonitor.json script, the server must be restarted and browser must be reloaded!!!
 
@@ -138,6 +157,16 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v1.4
+
+- Added button with additional MPX/Signal Canvas display (see Configuration Options)
+- Added improved FFT support for modern CPUs (see Configuration Options - thanks to AmateurAudioDude)
+- Improved PILOT/MPX/RDS detection
+- Added startup activation for the Spectrum Graph plugin
+- Added MPXBoost to enhance the MPX spectrum (see Configuration Options)
+- ESP32 MPX Auto Switching synchronized with Headless TEF command
+
 
 ### v1.3
 
