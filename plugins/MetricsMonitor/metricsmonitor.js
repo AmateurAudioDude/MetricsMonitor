@@ -102,10 +102,10 @@ const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is a
 
   // Map configuration to specific functional requirements
   const NEED_AudioMeter       = NEED_MODULE_0;                    
-  const NEED_METERS          = NEED_MODULE_1 || NEED_CANVAS_2;    
+  const NEED_METERS          = NEED_MODULE_1 || NEED_CANVAS_2 || NEED_CANVAS_4;    
   const NEED_ANALYZER        = NEED_MODULE_2 || NEED_CANVAS_2;    
   const NEED_SIGNAL_METER    = NEED_MODULE_3 || NEED_MODULE_4 || NEED_CANVAS_4; 
-  const NEED_SIGNAL_ANALYZER = NEED_MODULE_4 || NEED_CANVAS_4;    
+  const NEED_SIGNAL_ANALYZER = NEED_MODULE_4 || NEED_CANVAS_4;      
 
   // ---------------------------------------------------------
   // Expose Config globally to window object
