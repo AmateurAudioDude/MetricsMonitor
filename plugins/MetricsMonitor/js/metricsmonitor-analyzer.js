@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  metricsmonitor-analyzer.js						(V1.5B   //
+//  metricsmonitor-analyzer.js                      (V1.6)   //
 //                                                           //
-//  by Highpoint               last update: 04.01.2026       //
+//  by Highpoint               last update: 07.01.2026       //
 //                                                           //
 //  Thanks for support by                                    //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
@@ -20,6 +20,10 @@ const MeterInputCalibration = 0;    // Do not touch - this value is automaticall
 const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotScale = 1000;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSScale = 16500;    // Do not touch - this value is automatically updated via the config file
+const MeterMonoScale = 5000;    // Do not touch - this value is automatically updated via the config file
+const MeterStereoScale = 1300;    // Do not touch - this value is automatically updated via the config file
 const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
@@ -38,7 +42,7 @@ const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is 
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
-
+
 /////////////////////////////////////////////////////////////////
 // Shared WebSocket Hub (One connection for N renderers)
 /////////////////////////////////////////////////////////////////
@@ -182,10 +186,6 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   block.appendChild(wrap);
   parent.appendChild(block);
 
-  wrap.appendChild(canvas);
-  block.appendChild(wrap);
-  parent.appendChild(block);
-
   const ctx = canvas.getContext("2d");
 
   //////////////////////////////////////////////////////////////////
@@ -236,13 +236,16 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   let visibleDbMin = MPX_DB_MIN_DEFAULT;
   let visibleDbMax = MPX_DB_MAX_DEFAULT;
 
-  // Drag State
+  // Drag & Interaction State
   let isDragging = false;
   let dragStartX = 0;
   let dragStartY = 0;
   let dragStartCenterHz = 0;
   let dragStartCenterDB = 0;
   let hasDragged = false;
+  
+  // Hover State for Cursor
+  let hoverX = null;
 
   // Tooltip / Control State
   let magnifierArea = { x: 0, y: 0, width: 0, height: 0 };
@@ -370,7 +373,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     if (isHoveringMagnifier || ctrlKeyPressed) canvas.style.cursor = "help";
     else if (isDragging) canvas.style.cursor = "grabbing";
     else if (zoomLevel > 1.0 || zoomLevelY > 1.0) canvas.style.cursor = "grab";
-    else canvas.style.cursor = "pointer";
+    else canvas.style.cursor = "crosshair";
   }
 
   //////////////////////////////////////////////////////////////////
@@ -499,7 +502,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     return markers;
   }
 
-function drawMpxGrid() {
+  function drawMpxGrid() {
     ctx.lineWidth = 0.5;
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.font = "10px Arial";
@@ -516,8 +519,6 @@ function drawMpxGrid() {
     ctx.font = "11px Arial";
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     const gridTopY = TOP_MARGIN;
-    
-    // FIX: Use clientHeight instead of height
     const logicalHeight = canvas.clientHeight;
     const logicalWidth = canvas.clientWidth;
     const gridBottomY = logicalHeight - BOTTOM_MARGIN;
@@ -544,7 +545,6 @@ function drawMpxGrid() {
     });
 
     const range = getDisplayRange();
-    // FIX: Use logicalHeight for calculation
     const usableHeight = logicalHeight - TOP_MARGIN - BOTTOM_MARGIN;
     const dbMarkers = generateDbMarkers();
     dbMarkers.forEach(v => {
@@ -555,7 +555,7 @@ function drawMpxGrid() {
         ctx.strokeStyle = "rgba(255,255,255,0.12)";
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(logicalWidth, y); // FIX: Use logicalWidth
+        ctx.lineTo(logicalWidth, y);
         ctx.stroke();
         ctx.textAlign = "right";
         ctx.fillText(`${v}`, OFFSET_X - 6, y + 10 + LABEL_Y_OFFSET);
@@ -567,7 +567,6 @@ function drawMpxGrid() {
     if (!mpxSpectrum.length) return;
     const range = getDisplayRange();
     
-    // FIX: Use logical dimensions
     const logicalWidth = canvas.clientWidth;
     const logicalHeight = canvas.clientHeight;
     
@@ -621,6 +620,87 @@ function drawMpxGrid() {
     ctx.stroke();
   }
 
+  /**
+   * Calculates and draws a point on the spectrum line at the current mouse position,
+   * along with a text label showing Frequency and dB.
+   */
+  function drawHoverCursor() {
+    // Only draw if we have a valid hover X and user is not currently panning (dragging)
+    if (hoverX === null || isDragging) return;
+    if (hoverX < OFFSET_X) return; // Ignore if mouse is in the left margin
+
+    const logicalWidth = canvas.clientWidth;
+    const graphWidth = logicalWidth - OFFSET_X;
+
+    // 1. Calculate Frequency from Mouse X
+    let freqHz = 0;
+
+    if (zoomLevel > 1.0) {
+        // Zoomed: Simple linear interpolation across visible range
+        const pct = (hoverX - OFFSET_X) / graphWidth;
+        freqHz = visibleStartHz + pct * (visibleEndHz - visibleStartHz);
+    } else {
+        // Unzoomed: Reverse the curve stretching logic
+        // x = OFFSET_X + ((i / (totalBins-1)) * graphWidth * CURVE_X_SCALE * CURVE_X_STRETCH)
+        // We solve for freq using the relation between bin index and frequency
+        const usableWidth = graphWidth * CURVE_X_SCALE * zoomLevel; 
+        const effectiveWidth = usableWidth * CURVE_X_STRETCH;
+        const fraction = (hoverX - OFFSET_X) / effectiveWidth;
+        freqHz = fraction * MPX_FMAX_HZ * LABEL_CURVE_X_SCALE;
+    }
+
+    if (freqHz < 0 || freqHz > MPX_FMAX_HZ) return;
+
+    // 2. Calculate Y position (dB) from Frequency
+    if (!mpxSpectrum.length) return;
+    const bin = freqToBin(freqHz, mpxSpectrum.length);
+    if (bin < 0 || bin >= mpxSpectrum.length) return;
+
+    // Get dB value and apply all gain/offset modifications
+    let rawVal = mpxSpectrum[bin];
+    let val = (rawVal * CURVE_GAIN) + CURVE_Y_OFFSET_DB;
+    val = MPX_DB_MIN_DEFAULT + (val - MPX_DB_MIN_DEFAULT) * CURVE_VERTICAL_DYNAMICS;
+    
+    // Clamp values
+    if (val < MPX_DB_MIN_DEFAULT) val = MPX_DB_MIN_DEFAULT;
+    if (val > MPX_DB_MAX_DEFAULT) val = MPX_DB_MAX_DEFAULT;
+
+    // Convert dB to Screen Y
+    const range = getDisplayRange();
+    const logicalHeight = canvas.clientHeight;
+    const usableHeight = logicalHeight - TOP_MARGIN - BOTTOM_MARGIN;
+    const normY = (val - range.min) / (range.max - range.min);
+    const screenY = TOP_MARGIN + (1 - normY) * usableHeight * Y_STRETCH;
+
+    // 3. Draw the Point (Circle)
+    ctx.beginPath();
+    ctx.arc(hoverX, screenY, 4, 0, 2 * Math.PI); // Draw circle
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.stroke();
+
+    // 4. Draw the Label (Text)
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "12px Arial";
+    ctx.textAlign = "center";
+    
+    // Format label
+    let freqLabel = freqHz >= 1000 
+        ? (freqHz/1000).toFixed(1) + " kHz"
+        : Math.round(freqHz) + " Hz";
+        
+    let dbLabel = val.toFixed(1) + " dB";
+    
+    // Clamp text X position so it doesn't get cut off at screen edges
+    let labelX = hoverX;
+    if (labelX < 60) labelX = 60;
+    if (labelX > logicalWidth - 60) labelX = logicalWidth - 60;
+
+    ctx.fillText(`${freqLabel} (${dbLabel})`, labelX, screenY - 10);
+  }
+
   function drawMpxSpectrum() {
     if (!ctx || !canvas) return;
     
@@ -633,6 +713,9 @@ function drawMpxGrid() {
     drawMpxBackground();
     drawMpxGrid();
     drawMpxSpectrumTrace();
+    
+    // Draw the interactive cursor point on top of the trace
+    drawHoverCursor();
 
     const spectrumName = sampleRate === 48000 ? "FM Audio Spectrum"
       : sampleRate === 96000 ? "FM Baseband Spectrum"
@@ -754,6 +837,12 @@ function drawMpxGrid() {
       else if (!isHoveringMagnifier && wasHovering) hideTooltip();
       updateCursor();
 
+      // New Logic: Track hover position for cursor dot
+      if (!isDragging) {
+        hoverX = mouseX;
+        drawMpxSpectrum();
+      }
+
       if (!isDragging) return;
       if (Math.abs(e.clientX - dragStartX) > 5 || Math.abs(e.clientY - dragStartY) > 5) hasDragged = true;
       if (!hasDragged) return;
@@ -775,16 +864,19 @@ function drawMpxGrid() {
     });
 
     canvas.addEventListener("mouseleave", () => {
+      // Clear hover cursor when mouse leaves
+      hoverX = null;
+
       if (isHoveringMagnifier) {
         isHoveringMagnifier = false;
         hideTooltip();
-        drawMpxSpectrum();
       }
       if (isDragging) {
         isDragging = false;
         hasDragged = false;
         updateCursor();
       }
+      drawMpxSpectrum();
     });
 
     canvas.addEventListener("wheel", (e) => {
@@ -821,7 +913,9 @@ function drawMpxGrid() {
 
     canvas.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || isHoveringMagnifier) return;
-      if (zoomLevel <= 1.0 && zoomLevelY <= MIN_ZOOM_Y) return;
+      // Allow drag even if not zoomed, if that is preferred, but legacy logic was:
+      // if (zoomLevel <= 1.0 && zoomLevelY <= MIN_ZOOM_Y) return;
+      
       e.preventDefault();
       e.stopPropagation();
       isDragging = true;

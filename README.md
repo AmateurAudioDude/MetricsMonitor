@@ -11,16 +11,11 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 ## v1.5
 
-- Improved PILOT/MPX/RDS detection
-- Corrected faulty spectrum display on smartphone screen
-- Separate input control added for spectrum and meter display
-- Added custom color adjustments for meter displays and highest peak
-- Adjusting the RDS meter scale to the pilot display
-- Configuration variables restructured for improved clarity (see configuraion options)
-- An automatic backup of the JSON configuration file is created
+- JSON configuration settings can now be changed on the fly (a server restart is only necessary for selected settings; a browser reload may also be sufficient). 
+- Improved PILOT/RDS detection, MPX detection has been completely reworked, and new variables have been added (see configuration options below).
+- The spectrum analyzer now displays the current dB value on the curve for the selected frequency.
 
 ## Important note for this version: 
-- After installation, please set all calibration values ​​to 0 and then readjust them by entering the values ​​to be added or subtracted in kHz.
 - To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
 https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
 
@@ -44,7 +39,7 @@ The following variables can be changed in the metricsmonitor.json config file:
     /* Audio & MPX Hardware Settings */
 	
     "sampleRate": 48000,             //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
-    "MPXmode": "auto",               //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer and signal meter module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
+    "MPXmode": "off",                //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer and signal meter module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
     "MPXStereoDecoder": "off",	     //  Set the switch to "on" if you are decoding the stereo signal from MPX with a stereo decoder. This will enable the optical mono/stereo indicator to function when MPXmode is set to "on". The default setting is "off".          
     "MPXInputCard": "",              //  Configure the sound input exclusive to MPX (e.g., for Linux: "plughw:CARD=Device" or Windows: "Microphone (HD USB Audio Device)")
 
@@ -55,6 +50,12 @@ The following variables can be changed in the metricsmonitor.json config file:
     "MeterMPXCalibration": 0,        //  Calibrate the +/- level value for the MPX level indicator (default = 0)
     "MeterRDSCalibration": 0,        //  Calibrate the +/- level value for the RDS level indicator (default = 0)
 
+    /* Meter Scales */
+    "MeterPilotScale": 1000,         // Scale factor for Pilot deviation (kHz per amplitude - default is 1000)
+    "MeterRDSScale": 16500,          // Scale factor for RDS deviation (kHz per amplitude - default is 16500)
+    "MeterMonoScale": 5000,          // Scale factor for Mono (L+R) audio deviation (kHz per amplitude - default is 5000)
+    "MeterStereoScale": 1300,        // Scale factor for Stereo (L-R) audio deviation (kHz per amplitude - default is 1300)
+
     /* FFT / Spectrum Settings */
 	
     "fftLibrary": "fft-js",          //  For modern CPUs, change the desired FFT library to "pffft.wasm" (6-16x faster). "pffft.wasm" requires Node.js v14+ and works best with 64-bit operating systems / Node.js v16.4+ for SIMD support / x86-64, Apple Silicon, RPi 4/5. Default is "fft-js".
@@ -62,9 +63,10 @@ The following variables can be changed in the metricsmonitor.json config file:
 
     /* Spectrum Visuals */
 	
-	"SpectrumAttackLevel": 3,      
+    "SpectrumInputCalibration": 0,   //  Increase or decrease the value as needed to adjust the input for the spectrum. The default value is 0. 
+	"SpectrumAttackLevel": 3,        //  Response rate of the spectrum display as the signal increases. The default value is 3.
     "SpectrumDecayLevel": 15;        //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
-	"SpectrumSendInterval": 30,      //  Cchange the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
+	"SpectrumSendInterval": 30,      //  Change the sampling frequency of the audio signal. The higher the frame rate (FPS), the more frequent the sampling and the higher the CPU load. The default is 15.
     "SpectrumYOffset": -40,          //  Set the +/- level value for the analyzing curve offset (default = -40)
     "SpectrumYDynamics": 2,          //  Set the +/- level value for the analyzing curve dynamic (peak indication / default = 2)
 
@@ -88,7 +90,7 @@ The following variables can be changed in the metricsmonitor.json config file:
     "PeakMode": "dynamic";                    // To set a custom color for the highest peak, change the setting to "fixed". The default is "dynamic".
     "PeakColorFixed": "rgb(251, 174, 38)";    // Define a custom color here for the highest peak display. The default is "rgb(251, 174, 38)".
 
-After making changes to the metricsmonitor.json script, the server must be restarted and browser must be reloaded!!!
+After making changes to the metricsmonitor.json script, a server restart is only necessary for selected settings; a browser reload may also be sufficient!
 
 ## MPX Equipment
 
@@ -165,6 +167,16 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+## v1.5
+
+- Improved PILOT/MPX/RDS detection
+- Corrected faulty spectrum display on smartphone screen
+- Separate input control added for spectrum and meter display
+- Added custom color adjustments for meter displays and highest peak
+- Adjusting the RDS meter scale to the pilot display
+- Configuration variables restructured for improved clarity (see configuraion options)
+- An automatic backup of the JSON configuration file is created
 
 ### v1.4
 

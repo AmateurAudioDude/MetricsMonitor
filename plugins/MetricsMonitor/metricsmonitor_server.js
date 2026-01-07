@@ -1,8 +1,8 @@
 //////////////////////////////////////////////////////////////////
 //                                                              //
-//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER  (V1.5)    //
+//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER  (V1.6)    //
 //                                                              //
-//  by Highpoint               last update: 04.01.2026          //
+//  by Highpoint               last update: 07.01.2026          //
 //                                                              //
 //  Thanks for support by                                       //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude         //
@@ -16,7 +16,7 @@
 //  Set to 'true' to enable detailed logging of MPX/RDS/SNR values to the console.
 //  This is useful for calibrating the input levels or debugging signal issues.
 // ====================================================================================
-const ENABLE_EXTENDED_LOGGING = false;
+let ENABLE_EXTENDED_LOGGING = false;
 
 // ====================================================================================
 //  MODULE IMPORTS
@@ -61,11 +61,17 @@ const defaultConfig = {
   MeterMPXCalibration: 0.0,     // MPX Calibration in dB
   MeterRDSCalibration: 0.0,     // RDS Calibration in dB
 
-  // 3. FFT / Spectrum Settings
+  // 3. Meter Scales
+  MeterPilotScale: 1000,        // Scale factor for Pilot deviation (kHz per amplitude)
+  MeterRDSScale: 16500,         // Scale factor for RDS deviation (kHz per amplitude)
+  MeterMonoScale: 5000,         // Scale factor for Mono (L+R) audio deviation (kHz per amplitude)
+  MeterStereoScale: 1300,       // Scale factor for Stereo (L-R) audio deviation (kHz per amplitude)
+
+  // 4. FFT / Spectrum Settings
   fftLibrary: "fft-js",         // "fft-js" or "pffft.wasm" (faster)
   fftSize: 512,                 // FFT Window size (resolution)
   
-  // 4. Spectrum Visuals
+  // 5. Spectrum Visuals
   SpectrumInputCalibration: 0,  // Input Gain Calibration in dB (applies to SPECTRUM only)
   SpectrumAttackLevel: 3,       // Smoothing attack
   SpectrumDecayLevel: 15,       // Smoothing decay
@@ -73,17 +79,17 @@ const defaultConfig = {
   "Spectrum-Y-Offset": -40,     // Y-Axis offset for the visual curve
   "Spectrum-Y-Dynamics": 2,     // Dynamic range scaling for the visual curve
 
-  // 5. Meter Gains
+  // 6. Meter Gains
   StereoBoost: 2,               // Multiplier for L/R stereo meters
   AudioMeterBoost: 1.0,         // Multiplier for 5-Band audiometer
 
-  // 6. Layout & UI
+  // 7. Layout & UI
   MODULE_SEQUENCE: "1,2,0,3,4", // Order of UI modules
   CANVAS_SEQUENCE: "2,4",       // Order of Canvas elements
   LockVolumeSlider: true,       // Lock the main volume slider in UI
-  EnableSpectrumOnLoad: false,   // Start spectrum automatically
+  EnableSpectrumOnLoad: false,  // Start spectrum automatically
 
-  // 7. Colors & Peaks
+  // 8. Colors & Peaks
   MeterColorSafe: "rgb(0, 255, 0)",     // RGB Array (Green)
   MeterColorWarning: "rgb(255, 255,0)", // RGB Array (Yellow)
   MeterColorDanger: "rgb(255, 0, 0)",   // RGB Array (Red)
@@ -179,6 +185,8 @@ function normalizePluginConfig(json) {
   if (typeof json.DevRefKHz !== "undefined") delete json.DevRefKHz;
   if (typeof json.DevUncKHz !== "undefined") delete json.DevUncKHz;
   if (typeof json.DevScaleKHzPerAmp !== "undefined") delete json.DevScaleKHzPerAmp;
+  if (typeof json.MeterMPXScale !== "undefined") delete json.MeterMPXScale;
+
 
   // Apply Defaults for missing keys
   const result = {
@@ -192,6 +200,11 @@ function normalizePluginConfig(json) {
     MeterMPXCalibration: typeof json.MeterMPXCalibration !== "undefined" ? json.MeterMPXCalibration : defaultConfig.MeterMPXCalibration,
     MeterRDSCalibration: typeof json.MeterRDSCalibration !== "undefined" ? json.MeterRDSCalibration : defaultConfig.MeterRDSCalibration,
     
+    MeterPilotScale: typeof json.MeterPilotScale !== "undefined" ? json.MeterPilotScale : defaultConfig.MeterPilotScale,
+    MeterRDSScale: typeof json.MeterRDSScale !== "undefined" ? json.MeterRDSScale : defaultConfig.MeterRDSScale,
+    MeterMonoScale: typeof json.MeterMonoScale !== "undefined" ? json.MeterMonoScale : defaultConfig.MeterMonoScale,
+    MeterStereoScale: typeof json.MeterStereoScale !== "undefined" ? json.MeterStereoScale : defaultConfig.MeterStereoScale,
+
     fftLibrary: typeof json.fftLibrary !== "undefined" ? json.fftLibrary : defaultConfig.fftLibrary,
     fftSize: typeof json.fftSize !== "undefined" ? json.fftSize : defaultConfig.fftSize,
     
@@ -273,7 +286,7 @@ function loadConfig(filePath) {
 
       return json;
     } catch (err) {
-      console.error("[MPX CONFIG ERROR] Raw Content was:", fs.readFileSync(filePath, "utf8")); // Zeigt den Inhalt, der Fehler verursacht
+      logError("[MPX CONFIG ERROR] Raw Content was:", fs.readFileSync(filePath, "utf8")); // Shows the content causing the error
       logWarn(
         "[MPX] metricsmonitor.json invalid → rewriting with defaults:",
         err.message
@@ -296,73 +309,135 @@ function loadConfig(filePath) {
   return defaultConfig;
 }
 
-// Load the configuration now
-const configPlugin = loadConfig(configFilePath);
-
 // ====================================================================================
-//  CONFIGURATION VALUE EXTRACTION
-//  Extract values into const/let variables for cleaner usage in the script.
+//  CONFIGURATION VALUES & APPLICATION
+//  Declare variables that will hold config values and a function to update them.
 // ====================================================================================
 
-// Sequences can be arrays or comma-separated strings
-let MODULE_SEQUENCE = configPlugin.MODULE_SEQUENCE;
-let CANVAS_SEQUENCE = configPlugin.CANVAS_SEQUENCE;
+let configPlugin;
+
+// Sequences
+let MODULE_SEQUENCE;
+let CANVAS_SEQUENCE;
 
 // Sample Rate
-const ANALYZER_SAMPLE_RATE = Number(configPlugin.sampleRate) || 192000;
-const CONFIG_SAMPLE_RATE = ANALYZER_SAMPLE_RATE;
+let ANALYZER_SAMPLE_RATE;
+let CONFIG_SAMPLE_RATE;
 
 // Audio processing parameters
-const STEREO_BOOST = Number(configPlugin.StereoBoost) || 1.0;
-const AUDIO_METER_BOOST = Number(configPlugin.AudioMeterBoost) || 1.0;
-const FFT_LIBRARY = String(configPlugin.fftLibrary).trim();
-const FFT_SIZE = Number(configPlugin.fftSize) || 4096;
-const SPECTRUM_SEND_INTERVAL = Number(configPlugin.SpectrumSendInterval) || 30;
+let STEREO_BOOST;
+let AUDIO_METER_BOOST;
+let FFT_LIBRARY;
+let FFT_SIZE;
+let SPECTRUM_SEND_INTERVAL;
 
-// ====================================================================================
-//  CALIBRATION HANDLING (dB to Linear)
-// ====================================================================================
-
-// 1. Meters Calibration (MeterInputCalibration)
-const METER_INPUT_CALIBRATION_DB = Number(configPlugin.MeterInputCalibration) || 0;
-// Convert dB to Linear Gain Factor: Gain = 10^(dB/20)
-const METER_GAIN_FACTOR = Math.pow(10, METER_INPUT_CALIBRATION_DB / 20.0);
-
-// 2. Spectrum Calibration (SpectrumInputCalibration)
-const SPECTRUM_INPUT_CALIBRATION_DB = Number(configPlugin.SpectrumInputCalibration) || 0;
-// Convert dB to Linear Gain Factor for Spectrum
-const SPECTRUM_GAIN_FACTOR = Math.pow(10, SPECTRUM_INPUT_CALIBRATION_DB / 20.0);
-
-
-// Deviation / ITU settings (Hardcoded)
-const DEV_LIMIT_KHZ = 75;
-const DEV_REF_KHZ = 19;
-const DEV_UNC_KHZ = 2;
+// Calibration (dB to Linear)
+let METER_INPUT_CALIBRATION_DB;
+let METER_GAIN_FACTOR;
+let SPECTRUM_INPUT_CALIBRATION_DB;
+let SPECTRUM_GAIN_FACTOR;
 
 // Visual settings
-const SPECTRUM_ATTACK_LEVEL = Number(configPlugin.SpectrumAttackLevel) || 3;
-const SPECTRUM_DECAY_LEVEL = Number(configPlugin.SpectrumDecayLevel) || 15;
-const MPX_MODE = String(configPlugin.MPXmode || "auto").toLowerCase();
-const MPX_STEREO_DECODER = String(configPlugin.MPXStereoDecoder || "off").toLowerCase();
-const MPX_INPUT_CARD = String(configPlugin.MPXInputCard || "").replace(/^["'](.*)["']$/, "$1");
-const LOCK_VOLUME_SLIDER = configPlugin.LockVolumeSlider === true;
-const ENABLE_SPECTRUM_ON_LOAD = configPlugin.EnableSpectrumOnLoad === true;
+let SPECTRUM_ATTACK_LEVEL;
+let SPECTRUM_DECAY_LEVEL;
+let MPX_MODE;
+let MPX_STEREO_DECODER;
+let MPX_INPUT_CARD;
+let LOCK_VOLUME_SLIDER;
+let ENABLE_SPECTRUM_ON_LOAD;
 
 // Calibrations
-const METER_PILOT_CALIBRATION = Number(configPlugin.MeterPilotCalibration) || 0.0;
-const METER_MPX_CALIBRATION = Number(configPlugin.MeterMPXCalibration) || 0.0;
-const METER_RDS_CALIBRATION = Number(configPlugin.MeterRDSCalibration) || 0.0;
+let METER_PILOT_CALIBRATION;
+let METER_MPX_CALIBRATION;
+let METER_RDS_CALIBRATION;
+
+// Meter Scales
+let METER_PILOT_SCALE;
+let METER_RDS_SCALE;
+let METER_MONO_SCALE;
+let METER_STEREO_SCALE;
 
 // Curve adjustments
-const SPECTRUM_Y_OFFSET = Number(configPlugin["Spectrum-Y-Offset"]) || -40;
-const SPECTRUM_Y_DYNAMICS = Number(configPlugin["Spectrum-Y-Dynamics"]) || 2.0;
+let SPECTRUM_Y_OFFSET;
+let SPECTRUM_Y_DYNAMICS;
 
 // Color & Peak Settings
-const METER_COLOR_SAFE = JSON.stringify(configPlugin.MeterColorSafe || "rgb(0, 255, 0)");
-const METER_COLOR_WARNING = JSON.stringify(configPlugin.MeterColorWarning || "rgb(255, 255, 0)");
-const METER_COLOR_DANGER = JSON.stringify(configPlugin.MeterColorDanger || "rgb(255, 0, 0)");
-const PEAK_MODE = String(configPlugin.PeakMode || "dynamic");
-const PEAK_COLOR_FIXED = String(configPlugin.PeakColorFixed || "rgb(251, 174, 38)");
+let METER_COLOR_SAFE;
+let METER_COLOR_WARNING;
+let METER_COLOR_DANGER;
+let PEAK_MODE;
+let PEAK_COLOR_FIXED;
+
+// Feature Toggles
+let isModule2Active;
+let isValidFFTConfig;
+let ENABLE_FFT;
+let ENABLE_GOERTZEL;
+let ENABLE_MPX;
+let ENABLE_ANALYZER;
+
+/**
+ * APPLY CONFIG
+ * Takes a config object and updates all module-level variables.
+ * @param {Object} newConfig - The configuration object to apply.
+ */
+function applyConfig(newConfig) {
+    configPlugin = newConfig;
+
+    // Update all variables
+    MODULE_SEQUENCE = configPlugin.MODULE_SEQUENCE;
+    CANVAS_SEQUENCE = configPlugin.CANVAS_SEQUENCE;
+    ANALYZER_SAMPLE_RATE = Number(configPlugin.sampleRate) || 192000;
+    CONFIG_SAMPLE_RATE = ANALYZER_SAMPLE_RATE;
+    STEREO_BOOST = Number(configPlugin.StereoBoost) || 1.0;
+    AUDIO_METER_BOOST = Number(configPlugin.AudioMeterBoost) || 1.0;
+    FFT_LIBRARY = String(configPlugin.fftLibrary).trim();
+    FFT_SIZE = Number(configPlugin.fftSize) || 4096;
+    SPECTRUM_SEND_INTERVAL = Number(configPlugin.SpectrumSendInterval) || 30;
+    METER_INPUT_CALIBRATION_DB = Number(configPlugin.MeterInputCalibration) || 0;
+    METER_GAIN_FACTOR = Math.pow(10, METER_INPUT_CALIBRATION_DB / 20.0);
+    SPECTRUM_INPUT_CALIBRATION_DB = Number(configPlugin.SpectrumInputCalibration) || 0;
+    SPECTRUM_GAIN_FACTOR = Math.pow(10, SPECTRUM_INPUT_CALIBRATION_DB / 20.0);
+    SPECTRUM_ATTACK_LEVEL = Number(configPlugin.SpectrumAttackLevel) || 3;
+    SPECTRUM_DECAY_LEVEL = Number(configPlugin.SpectrumDecayLevel) || 15;
+    MPX_MODE = String(configPlugin.MPXmode || "auto").toLowerCase();
+    MPX_STEREO_DECODER = String(configPlugin.MPXStereoDecoder || "off").toLowerCase();
+    MPX_INPUT_CARD = String(configPlugin.MPXInputCard || "").replace(/^["'](.*)["']$/, "$1");
+    LOCK_VOLUME_SLIDER = configPlugin.LockVolumeSlider === true;
+    ENABLE_SPECTRUM_ON_LOAD = configPlugin.EnableSpectrumOnLoad === true;
+    METER_PILOT_CALIBRATION = Number(configPlugin.MeterPilotCalibration) || 0.0;
+    METER_MPX_CALIBRATION = Number(configPlugin.MeterMPXCalibration) || 0.0;
+    METER_RDS_CALIBRATION = Number(configPlugin.MeterRDSCalibration) || 0.0;
+    METER_PILOT_SCALE = Number(configPlugin.MeterPilotScale) || 300.0;
+    METER_RDS_SCALE = Number(configPlugin.MeterRDSScale) || 24000.0;
+    METER_MONO_SCALE = Number(configPlugin.MeterMonoScale) || 55000.0;
+    METER_STEREO_SCALE = Number(configPlugin.MeterStereoScale) || 250000.0;
+    SPECTRUM_Y_OFFSET = Number(configPlugin["Spectrum-Y-Offset"]) || -40;
+    SPECTRUM_Y_DYNAMICS = Number(configPlugin["Spectrum-Y-Dynamics"]) || 2.0;
+    METER_COLOR_SAFE = JSON.stringify(configPlugin.MeterColorSafe || "rgb(0, 255, 0)");
+    METER_COLOR_WARNING = JSON.stringify(configPlugin.MeterColorWarning || "rgb(255, 255, 0)");
+    METER_COLOR_DANGER = JSON.stringify(configPlugin.MeterColorDanger || "rgb(255, 0, 0)");
+    PEAK_MODE = String(configPlugin.PeakMode || "dynamic");
+    PEAK_COLOR_FIXED = String(configPlugin.PeakColorFixed || "rgb(251, 174, 38)");
+    
+    // Update feature toggles
+    isModule2Active = sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
+    isValidFFTConfig = FFT_LIBRARY && FFT_LIBRARY.trim() !== "" && FFT_SIZE > 0;
+    ENABLE_FFT = isValidFFTConfig && isModule2Active;
+    ENABLE_GOERTZEL = sequenceContainsId(MODULE_SEQUENCE, 1) || sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
+    ENABLE_MPX = ENABLE_FFT || ENABLE_GOERTZEL;
+    ENABLE_ANALYZER = ENABLE_MPX;
+
+    logInfo("[MPX Config] New configuration has been applied to the server.");
+}
+
+/**
+ * Reloads the config from disk and applies it.
+ */
+function reloadAndApplyConfig() {
+    const newConfig = loadConfig(configFilePath);
+    applyConfig(newConfig);
+}
 
 // ====================================================================================
 //  PATH DEFINITIONS FOR CLIENT FILES
@@ -410,39 +485,19 @@ function sequenceContainsId(seq, id) {
   return arr.includes(id);
 }
 
-// ------------------------------------------------------------------------------------
-//  FEATURE TOGGLES (OPTIMIZATION)
-// ------------------------------------------------------------------------------------
-
-// 1. Analyzer (FFT) - Visual Spectrum
-// Runs if Module 1 (Analyzer) OR Canvas 2 (MPX Canvas) is present
-const ENABLE_FFT = sequenceContainsId(MODULE_SEQUENCE, 1) || 
-                   sequenceContainsId(CANVAS_SEQUENCE, 2);
-
-// 2. Goertzel (Math/Meters) - Value Calculation
-// Runs if Module 1 (Analyzer/Overlay), Module 2 (Meters), or Canvas 2 is present.
-// This ensures that metering data is available when any relevant module is active.
-const ENABLE_GOERTZEL = sequenceContainsId(MODULE_SEQUENCE, 1) || 
-                        sequenceContainsId(MODULE_SEQUENCE, 2) || 
-                        sequenceContainsId(CANVAS_SEQUENCE, 2);
-
-// Master Switch
-const ENABLE_MPX = ENABLE_FFT || ENABLE_GOERTZEL;
-const ENABLE_ANALYZER = ENABLE_MPX; // Legacy Alias
-
 // ====================================================================================
 //  DEPENDENCY MANAGEMENT
 //  Ensures that necessary node modules are installed (e.g., fft-js).
 // ====================================================================================
 
-const RequiredModules = [
-  "fft-js",
-  "bit-twiddle",
-  // If pffft.wasm is selected, we check it, otherwise we skip
-  FFT_LIBRARY === "pffft.wasm" ? "@echogarden/pffft-wasm" : null,
-].filter(Boolean);
-
 function ensureRequiredModules() {
+  const RequiredModules = [
+    "fft-js",
+    "bit-twiddle",
+    // If pffft.wasm is selected, we check it, otherwise we skip
+    FFT_LIBRARY === "pffft.wasm" ? "@echogarden/pffft-wasm" : null,
+  ].filter(Boolean);
+
   RequiredModules.forEach((moduleName) => {
     const modulePath = path.join(__dirname, "./../../node_modules", moduleName);
     if (!fs.existsSync(modulePath)) {
@@ -589,152 +644,165 @@ function patchHelpersForLocalhostBypass() {
 }
 
 // ====================================================================================
-//  CLIENT-SIDE FILE UPDATES
-//  Injects the current server configuration directly into the client .js files.
+//  CLIENT-SIDE FILE UPDATES & DEPLOYMENT
 // ====================================================================================
 
 /**
- * Normalize sequence to JSON string for injection
+ * Injects the current server configuration directly into the client .js files.
  */
-function normalizeSequenceJS(seq) {
-  if (Array.isArray(seq)) {
-    return JSON.stringify(seq);
-  }
-  if (typeof seq === "string") {
-    const items = seq
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .map(Number);
-    return JSON.stringify(items);
-  }
-  return "[0, 1, 2, 3, 4]";
-}
-
-const MODULE_SEQUENCE_JS = normalizeSequenceJS(MODULE_SEQUENCE);
-const CANVAS_SEQUENCE_JS = normalizeSequenceJS(CANVAS_SEQUENCE);
-
 function updateSettings() {
-  function buildHeaderBlock() {
-    // This block is injected at the top of client files
-    // NOTE: Sending renamed constants to the client to match new naming convention
-    return (
-      `const sampleRate = ${ANALYZER_SAMPLE_RATE};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MPXmode = "${MPX_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MPXStereoDecoder = "${MPX_STEREO_DECODER}";    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MPXInputCard = "${MPX_INPUT_CARD}";    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterInputCalibration = ${METER_INPUT_CALIBRATION_DB};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterPilotCalibration = ${METER_PILOT_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterMPXCalibration = ${METER_MPX_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterRDSCalibration = ${METER_RDS_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const fftLibrary = "${FFT_LIBRARY}";    // Do not touch - this value is automatically updated via the config file\n` +
-      `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumAttackLevel = ${SPECTRUM_ATTACK_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumDecayLevel = ${SPECTRUM_DECAY_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumSendInterval = ${SPECTRUM_SEND_INTERVAL};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumYOffset = ${SPECTRUM_Y_OFFSET};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const SpectrumYDynamics = ${SPECTRUM_Y_DYNAMICS};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const StereoBoost = ${STEREO_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const AudioMeterBoost = ${AUDIO_METER_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
-	  `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const CANVAS_SEQUENCE = ${CANVAS_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const LockVolumeSlider = ${LOCK_VOLUME_SLIDER};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const EnableSpectrumOnLoad = ${ENABLE_SPECTRUM_ON_LOAD};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterColorSafe = ${METER_COLOR_SAFE};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterColorWarning = ${METER_COLOR_WARNING};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const MeterColorDanger = ${METER_COLOR_DANGER};    // Do not touch - this value is automatically updated via the config file\n` +
-      `const PeakMode = "${PEAK_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
-      `const PeakColorFixed = "${PEAK_COLOR_FIXED}";    // Do not touch - this value is automatically updated via the config file\n` 
-    );
-  }
-
-  function removeOldConstants(code) {
-    // Regex to remove existing constant definitions to prevent duplicates
-    let out = code
-      // Old names
-      .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+CurveYOffset\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+CurveYDynamics\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+Curve-Y-Offset\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+Curve-Y-Dynamics\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+stereoBoost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+eqBoost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+EqBoost\s*=.*;[^\n]*\n?/gm, "")
-
-      // Renamed names
-      .replace(/^\s*const\s+MPXinputCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXboost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXinputCalibrationDB\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+pilotCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+mpxCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+rdsCalibration\s*=.*;[^\n]*\n?/gm, "")
-
-      // New names (to ensure clean update)
-      .replace(/^\s*const\s+SpectrumSendInterval\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+SpectrumYOffset\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+SpectrumYDynamics\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+StereoBoost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+AudioMeterBoost\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterInputCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterPilotCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterMPXCalibration\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterRDSCalibration\s*=.*;[^\n]*\n?/gm, "")
-
-      // Other standard constants
-      .replace(/^\s*const\s+MODULE_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+CANVAS_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+sampleRate\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+fftLibrary\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+SpectrumAttackLevel\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+SpectrumDecayLevel\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXmode\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+ExtStereoDecoder\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXStereoDecoder\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MPXInputCard\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+LockVolumeSlider\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+EnableSpectrumOnLoad\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterColorSafe\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterColorWarning\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+MeterColorDanger\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+PeakMode\s*=.*;[^\n]*\n?/gm, "")
-      .replace(/^\s*const\s+PeakColorFixed\s*=.*;[^\n]*\n?/gm, "");
-
-    out = out.replace(
-      /^\s*\/\/\s*Do not touch - this value is automatically updated via the config file\s*$/gm,
-      ""
-    );
-
-    return out;
-  }
-
-  function insertAfterIIFE(code) {
-    const cleaned = removeOldConstants(code);
-    // Find the start of the Immediately Invoked Function Expression
-    const iifePattern = /(\(\s*\)\s*=>\s*\{)[ \t]*\n?/;
-
-    if (!iifePattern.test(cleaned)) {
-      return cleaned;
+    logInfo("[MPX Config] Injecting latest configuration into client JS files...");
+    
+    /**
+     * Normalize sequence to JSON string for injection
+     */
+    function normalizeSequenceJS(seq) {
+        if (Array.isArray(seq)) {
+            return JSON.stringify(seq);
+        }
+        if (typeof seq === "string") {
+            const items = seq
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+            .map(Number);
+            return JSON.stringify(items);
+        }
+        return "[0, 1, 2, 3, 4]";
     }
 
-    return cleaned.replace(
-      iifePattern,
-      (_, prefix) => `${prefix}\n${buildHeaderBlock()}`
-    );
-  }
+    const MODULE_SEQUENCE_JS = normalizeSequenceJS(MODULE_SEQUENCE);
+    const CANVAS_SEQUENCE_JS = normalizeSequenceJS(CANVAS_SEQUENCE);
 
-  // ====================================================================================
-  //  CLIENT PATCH: METERS DEBUG LOGGING + MPX/RDS HANDLING
-  // ====================================================================================
-  function patchMetersClient(code) {
-    let out = code;
+    function buildHeaderBlock() {
+        // This block is injected at the top of client files
+        // NOTE: Sending renamed constants to the client to match new naming convention
+        return (
+          `const sampleRate = ${ANALYZER_SAMPLE_RATE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MPXmode = "${MPX_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MPXStereoDecoder = "${MPX_STEREO_DECODER}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MPXInputCard = "${MPX_INPUT_CARD}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterInputCalibration = ${METER_INPUT_CALIBRATION_DB};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterPilotCalibration = ${METER_PILOT_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterMPXCalibration = ${METER_MPX_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterRDSCalibration = ${METER_RDS_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterPilotScale = ${METER_PILOT_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterRDSScale = ${METER_RDS_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterMonoScale = ${METER_MONO_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterStereoScale = ${METER_STEREO_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const fftLibrary = "${FFT_LIBRARY}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const SpectrumAttackLevel = ${SPECTRUM_ATTACK_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const SpectrumDecayLevel = ${SPECTRUM_DECAY_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const SpectrumSendInterval = ${SPECTRUM_SEND_INTERVAL};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const SpectrumYOffset = ${SPECTRUM_Y_OFFSET};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const SpectrumYDynamics = ${SPECTRUM_Y_DYNAMICS};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const StereoBoost = ${STEREO_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const AudioMeterBoost = ${AUDIO_METER_BOOST};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const CANVAS_SEQUENCE = ${CANVAS_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const LockVolumeSlider = ${LOCK_VOLUME_SLIDER};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const EnableSpectrumOnLoad = ${ENABLE_SPECTRUM_ON_LOAD};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterColorSafe = ${METER_COLOR_SAFE};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterColorWarning = ${METER_COLOR_WARNING};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const MeterColorDanger = ${METER_COLOR_DANGER};    // Do not touch - this value is automatically updated via the config file\n` +
+          `const PeakMode = "${PEAK_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const PeakColorFixed = "${PEAK_COLOR_FIXED}";    // Do not touch - this value is automatically updated via the config file\n` 
+        );
+    }
 
-    // 1) Inject debug helpers once (search marker: mm_meters_debug)
-    if (!out.includes("mm_meters_debug")) {
-      const debugBlock = `
+    function removeOldConstants(code) {
+        // Regex to remove existing constant definitions to prevent duplicates
+        let out = code
+        // Old names
+        .replace(/^\s*const\s+minSendIntervalMs\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+CurveYOffset\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+CurveYDynamics\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+Curve-Y-Offset\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+Curve-Y-Dynamics\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+stereoBoost\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+eqBoost\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+EqBoost\s*=.*;[^\n]*\n?/gm, "")
+
+        // Renamed names
+        .replace(/^\s*const\s+MPXinputCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MPXboost\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MPXinputCalibrationDB\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+pilotCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+mpxCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+rdsCalibration\s*=.*;[^\n]*\n?/gm, "")
+
+        // New names (to ensure clean update)
+        .replace(/^\s*const\s+SpectrumSendInterval\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+SpectrumYOffset\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+SpectrumYDynamics\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+StereoBoost\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+AudioMeterBoost\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterInputCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterPilotCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterMPXCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterRDSCalibration\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterPilotScale\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterMPXScale\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterRDSScale\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterMonoScale\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterStereoScale\s*=.*;[^\n]*\n?/gm, "")
+
+        // Other standard constants
+        .replace(/^\s*const\s+MODULE_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+CANVAS_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+sampleRate\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+fftLibrary\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+SpectrumAttackLevel\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+SpectrumDecayLevel\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MPXmode\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+ExtStereoDecoder\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MPXStereoDecoder\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MPXInputCard\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+LockVolumeSlider\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+EnableSpectrumOnLoad\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterColorSafe\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterColorWarning\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+MeterColorDanger\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+PeakMode\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+PeakColorFixed\s*=.*;[^\n]*\n?/gm, "");
+
+        out = out.replace(
+        /^\s*\/\/\s*Do not touch - this value is automatically updated via the config file\s*$/gm,
+        ""
+        );
+
+        return out;
+    }
+
+    function insertAfterIIFE(code) {
+        const cleaned = removeOldConstants(code);
+        // Find the start of the Immediately Invoked Function Expression
+        const iifePattern = /(\(\s*\)\s*=>\s*\{)[ \t]*\n?/;
+
+        if (!iifePattern.test(cleaned)) {
+            return cleaned;
+        }
+
+        return cleaned.replace(
+        iifePattern,
+        (_, prefix) => `${prefix}\n${buildHeaderBlock()}`
+        );
+    }
+
+    // ====================================================================================
+    //  CLIENT PATCH: METERS DEBUG LOGGING + MPX/RDS HANDLING
+    // ====================================================================================
+    function patchMetersClient(code) {
+        let out = code;
+
+        // 1) Inject debug helpers once (search marker: mm_meters_debug)
+        if (!out.includes("mm_meters_debug")) {
+        const debugBlock = `
     // ============================
-    // DEBUG LOGGING (CLIENT)
+    // DEBUG LOGGING (CLIENT)  // mm_meters_debug
     // Enable:
     //   localStorage.setItem("mm_meters_debug","1");   // throttled
     //   localStorage.setItem("mm_meters_debug","all"); // EVERY WS message
@@ -761,144 +829,148 @@ function updateSettings() {
       try { console.log("[MM Meters] " + tag, data); } catch {}
     }
 `;
-      const reVals = new RegExp(
-        "(let\\s+valMpx\\s*=\\s*0;\\s*\\n\\s*let\\s+valPilot\\s*=\\s*0;\\s*\\n\\s*let\\s+valRds\\s*=\\s*0;\\s*\\n)"
-      );
-      out = out.replace(reVals, "$1" + debugBlock + "\n");
+        const reVals = new RegExp(
+            "(let\\s+valMpx\\s*=\\s*0;\\s*\\n\\s*let\\s+valPilot\\s*=\\s*0;\\s*\\n\\s*let\\s+valRds\\s*=\\s*0;\\s*\\n)"
+        );
+        out = out.replace(reVals, "$1" + debugBlock + "\n");
+        }
+
+        // 2) Fix early return that kills MPX/RDS updates
+        const reEarlyReturn = new RegExp(
+        "^\\s*//\\s*Ignore spectrum array[^\\n]*\\n\\s*if\\s*\\(\\s*Array\\.isArray\\(message\\.value\\)\\s*\\)\\s*\\{\\s*return;\\s*\\}\\s*\\n",
+        "m"
+        );
+        out = out.replace(
+        reEarlyReturn,
+        "        // NOTE: The server always sends 'value' as spectrum array alongside peak/pilotKHz/rdsKHz.\n" +
+        "        // Do NOT return here. Only ignore spectrum-only packets that lack 'peak'.\n" +
+        "        if (typeof message.peak !== \"number\" && Array.isArray(message.value)) { return; }\n\n"
+        );
+
+        // 3) Add detailed logging to handleMpxMessage (log complete MPX payload + extracted values)
+        const reHandleHead = new RegExp(
+        "(function\\s+handleMpxMessage\\s*\\(message\\)\\s*\\{\\s*\\n\\s*if\\s*\\(!message\\s*\\|\\|\\s*typeof\\s+message\\s*!==\\s*[\"']object[\"']\\)\\s*return;\\s*\\n)"
+        );
+        out = out.replace(
+        reHandleHead,
+        "$1" +
+        "        try {\n" +
+        "          const safe = Object.assign({}, message);\n" +
+        "          if (Array.isArray(safe.value)) {\n" +
+        "            safe.valueLen = safe.value.length;\n" +
+        "            safe.valuePreview = safe.value.slice(0, 12);\n" +
+        "            delete safe.value;\n" +
+        "          }\n" +
+        "          mmMetersLog(\"RX MPX (full)\", safe, 0);\n" +
+        "          mmMetersLog(\"RX MPX VALUES\", {\n" +
+        "            peak: message.peak,\n" +
+        "            pilotKHz: message.pilotKHz,\n" +
+        "            rdsKHz: message.rdsKHz,\n" +
+        "            pilotRaw: message.pilot,\n" +
+        "            rdsRaw: message.rds,\n" +
+        "            noise: message.noise,\n" +
+        "            snr: message.snr\n" +
+        "          }, 0);\n" +
+        "        } catch {}\n"
+        );
+
+        // 4) Expand WS onmessage logging (RAW + PARSED)
+        const reWsCore = new RegExp(
+        "const\\s+msg\\s*=\\s*JSON\\.parse\\(event\\.data\\);\\s*\\n\\s*//\\s*Safety:\\s*Don't process bare arrays[^\\n]*\\n\\s*if\\s*\\(Array\\.isArray\\(msg\\)\\)\\s*return;\\s*\\n\\s*\\n\\s*if\\s*\\(msg\\.type\\s*===\\s*[\"']MPX[\"']\\)\\s*handleMpxMessage\\(msg\\);",
+        "m"
+        );
+        out = out.replace(
+        reWsCore,
+        "mmMetersLog(\"WS RAW\", event.data, 0);\n" +
+        "          const msg = JSON.parse(event.data);\n" +
+        "          if (Array.isArray(msg)) {\n" +
+        "            mmMetersLog(\"WS PARSED (array)\", { len: msg.length, preview: msg.slice(0, 12) }, 0);\n" +
+        "            return;\n" +
+        "          }\n" +
+        "          try {\n" +
+        "            const safe = Object.assign({}, msg);\n" +
+        "            if (Array.isArray(safe.value)) {\n" +
+        "              safe.valueLen = safe.value.length;\n" +
+        "              safe.valuePreview = safe.value.slice(0, 12);\n" +
+        "              delete safe.value;\n" +
+        "            }\n" +
+        "            mmMetersLog(\"WS PARSED (object)\", safe, 0);\n" +
+        "          } catch {}\n" +
+        "          if (msg.type === \"MPX\") handleMpxMessage(msg);"
+        );
+
+        return out;
     }
 
-    // 2) Fix early return that kills MPX/RDS updates
-    const reEarlyReturn = new RegExp(
-      "^\\s*//\\s*Ignore spectrum array[^\\n]*\\n\\s*if\\s*\\(\\s*Array\\.isArray\\(message\\.value\\)\\s*\\)\\s*\\{\\s*return;\\s*\\}\\s*\\n",
-      "m"
-    );
-    out = out.replace(
-      reEarlyReturn,
-      "        // NOTE: The server always sends 'value' as spectrum array alongside peak/pilotKHz/rdsKHz.\n" +
-      "        // Do NOT return here. Only ignore spectrum-only packets that lack 'peak'.\n" +
-      "        if (typeof message.peak !== \"number\" && Array.isArray(message.value)) { return; }\n\n"
-    );
-
-    // 3) Add detailed logging to handleMpxMessage (log complete MPX payload + extracted values)
-    const reHandleHead = new RegExp(
-      "(function\\s+handleMpxMessage\\s*\\(message\\)\\s*\\{\\s*\\n\\s*if\\s*\\(!message\\s*\\|\\|\\s*typeof\\s+message\\s*!==\\s*[\"']object[\"']\\)\\s*return;\\s*\\n)"
-    );
-    out = out.replace(
-      reHandleHead,
-      "$1" +
-      "        try {\n" +
-      "          const safe = Object.assign({}, message);\n" +
-      "          if (Array.isArray(safe.value)) {\n" +
-      "            safe.valueLen = safe.value.length;\n" +
-      "            safe.valuePreview = safe.value.slice(0, 12);\n" +
-      "            delete safe.value;\n" +
-      "          }\n" +
-      "          mmMetersLog(\"RX MPX (full)\", safe, 0);\n" +
-      "          mmMetersLog(\"RX MPX VALUES\", {\n" +
-      "            peak: message.peak,\n" +
-      "            pilotKHz: message.pilotKHz,\n" +
-      "            rdsKHz: message.rdsKHz,\n" +
-      "            pilotRaw: message.pilot,\n" +
-      "            rdsRaw: message.rds,\n" +
-      "            noise: message.noise,\n" +
-      "            snr: message.snr\n" +
-      "          }, 0);\n" +
-      "        } catch {}\n"
-    );
-
-    // 4) Expand WS onmessage logging (RAW + PARSED)
-    const reWsCore = new RegExp(
-      "const\\s+msg\\s*=\\s*JSON\\.parse\\(event\\.data\\);\\s*\\n\\s*//\\s*Safety:\\s*Don't process bare arrays[^\\n]*\\n\\s*if\\s*\\(Array\\.isArray\\(msg\\)\\)\\s*return;\\s*\\n\\s*\\n\\s*if\\s*\\(msg\\.type\\s*===\\s*[\"']MPX[\"']\\)\\s*handleMpxMessage\\(msg\\);",
-      "m"
-    );
-    out = out.replace(
-      reWsCore,
-      "mmMetersLog(\"WS RAW\", event.data, 0);\n" +
-      "          const msg = JSON.parse(event.data);\n" +
-      "          if (Array.isArray(msg)) {\n" +
-      "            mmMetersLog(\"WS PARSED (array)\", { len: msg.length, preview: msg.slice(0, 12) }, 0);\n" +
-      "            return;\n" +
-      "          }\n" +
-      "          try {\n" +
-      "            const safe = Object.assign({}, msg);\n" +
-      "            if (Array.isArray(safe.value)) {\n" +
-      "              safe.valueLen = safe.value.length;\n" +
-      "              safe.valuePreview = safe.value.slice(0, 12);\n" +
-      "              delete safe.value;\n" +
-      "            }\n" +
-      "            mmMetersLog(\"WS PARSED (object)\", safe, 0);\n" +
-      "          } catch {}\n" +
-      "          if (msg.type === \"MPX\") handleMpxMessage(msg);"
-    );
-
-    return out;
-  }
-
-  function updateClientFile(filePath, label, modifyFn) {
-    try {
-      const data = fs.readFileSync(filePath, "utf8");
-      const updated = modifyFn(data);
-      fs.writeFileSync(filePath, updated, "utf8");
-    } catch (err) {
-      logError(`[MPX] Error updating ${label}:`, err);
+    // BUG FIX: Define this helper function *before* it is used.
+    function updateClientFile(filePath, label, modifyFn) {
+        try {
+            const data = fs.readFileSync(filePath, "utf8");
+            const updated = modifyFn(data);
+            fs.writeFileSync(filePath, updated, "utf8");
+            logInfo(`[MPX Config] Successfully updated client file: ${path.basename(filePath)}`);
+        } catch (err) {
+            logError(`[MPX] Error updating ${label}:`, err);
+        }
     }
-  }
 
-  // Update specific files
-  updateClientFile(MetricsMonitorClientFile, "metricsmonitor.js", (code) => {
-    let updated = code;
-    const moduleSeqRegex = /^\s*const\s+MODULE_SEQUENCE\s*=.*;[^\n]*$/m;
 
-    if (moduleSeqRegex.test(updated)) {
-      updated = updated.replace(
-        moduleSeqRegex,
-        `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file`
-      );
-    } else {
-      updated =
-        `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
-        updated;
-    }
-    return insertAfterIIFE(updated);
-  });
+    // Update specific files
+    updateClientFile(MetricsMonitorClientFile, "metricsmonitor.js", (code) => {
+        let updated = code;
+        const moduleSeqRegex = /^\s*const\s+MODULE_SEQUENCE\s*=.*;[^\n]*$/m;
 
-  updateClientFile(
-    MetricsMonitorClientAnalyzerFile,
-    "metricsmonitor-analyzer.js",
-    insertAfterIIFE
-  );
-  updateClientFile(
-    MetricsMonitorClientAudioMeterFile,
-    "metricsmonitor-audiometer.js",
-    insertAfterIIFE
-  );
-  updateClientFile(
-    MetricsMonitorClientHeaderFile,
-    "metricsmonitor-header.js",
-    insertAfterIIFE
-  );
-  updateClientFile(
-    MetricsMonitorClientMetersFile,
-    "metricsmonitor-meters.js",
-    (code) => patchMetersClient(insertAfterIIFE(code))
-  );
-  updateClientFile(
-    MetricsMonitorClientSignalMeterFile,
-    "metricsmonitor-signalmeter.js",
-    insertAfterIIFE
-  );
-  updateClientFile(
-    MetricsMonitorClientSignalAnalyzerFile,
-    "metricsmonitor-signal-analyzer.js",
-    insertAfterIIFE
-  );
+        if (moduleSeqRegex.test(updated)) {
+        updated = updated.replace(
+            moduleSeqRegex,
+            `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file`
+        );
+        } else {
+        updated =
+            `const MODULE_SEQUENCE = ${MODULE_SEQUENCE_JS};    // Do not touch - this value is automatically updated via the config file\n` +
+            updated;
+        }
+        return insertAfterIIFE(updated);
+    });
+
+    updateClientFile(
+        MetricsMonitorClientAnalyzerFile,
+        "metricsmonitor-analyzer.js",
+        insertAfterIIFE
+    );
+    updateClientFile(
+        MetricsMonitorClientAudioMeterFile,
+        "metricsmonitor-audiometer.js",
+        insertAfterIIFE
+    );
+    updateClientFile(
+        MetricsMonitorClientHeaderFile,
+        "metricsmonitor-header.js",
+        insertAfterIIFE
+    );
+    updateClientFile(
+        MetricsMonitorClientMetersFile,
+        "metricsmonitor-meters.js",
+        (code) => patchMetersClient(insertAfterIIFE(code))
+    );
+    updateClientFile(
+        MetricsMonitorClientSignalMeterFile,
+        "metricsmonitor-signalmeter.js",
+        insertAfterIIFE
+    );
+    updateClientFile(
+        MetricsMonitorClientSignalAnalyzerFile,
+        "metricsmonitor-signal-analyzer.js",
+        insertAfterIIFE
+    );
 }
 
 /**
- * DEPLOY CLIENT FILES
- * Copies the client-side files from the plugin directory to the Webserver's public `web` folder.
+ * DEPLOY ALL CLIENT FILES (for initial startup)
+ * Copies all necessary client-side files (JS, CSS, images) from the plugin 
+ * directory to the Webserver's public `web` folder.
  */
-function copyClientFiles() {
+function copyAllClientFiles() {
   if (process.platform === "win32") {
     logInfo("[MPX] Windows detected – skipping client file copy.");
     return;
@@ -907,61 +979,201 @@ function copyClientFiles() {
   const srcDir = __dirname;
   const destDir = path.join(__dirname, "../../web/js/plugins/MetricsMonitor");
 
-  logInfo("[MPX] Updating client files in:", destDir);
+  logInfo("[MPX] Deploying all client files to web directory:", destDir);
 
   try {
+    // Ensure the root destination directory exists
     fs.mkdirSync(destDir, { recursive: true });
     fs.chmodSync(destDir, 0o775);
   } catch (e) {
-    logError("[MPX] Failed to create destination directory:", e);
+    logError("[MPX] Failed to create destination directory:", e.message);
     return;
   }
 
-  const folders = ["css", "js", "images"];
+  // --- 1. Copy subdirectory content (js, css, images) ---
+  const subdirectories = ["js", "css", "images"];
 
-  folders.forEach((folder) => {
+  subdirectories.forEach((folder) => {
     const folderSrc = path.join(srcDir, folder);
     const folderDest = path.join(destDir, folder);
 
-    if (!fs.existsSync(folderSrc)) return;
+    if (fs.existsSync(folderSrc)) {
+      try {
+        fs.mkdirSync(folderDest, { recursive: true });
+        fs.chmodSync(folderDest, 0o775);
+      } catch (err) {
+        logError(`[MPX] Failed to create subdirectory ${folderDest}:`, err.message);
+        return;
+      }
 
-    fs.mkdirSync(folderDest, { recursive: true });
-    try {
-      fs.chmodSync(folderDest, 0o775);
-    } catch {}
+      const files = fs.readdirSync(folderSrc);
+      files.forEach((file) => {
+        const s = path.join(folderSrc, file);
+        const d = path.join(folderDest, file);
+        try {
+          fs.copyFileSync(s, d);
+          fs.chmodSync(d, 0o664);
+        } catch (err) {
+          logError(`[MPX] Error copying file (${folder}/${file}):`, err.message);
+        }
+      });
+    }
+  });
 
-    const items = fs.readdirSync(folderSrc);
-    items.forEach((item) => {
-      const s = path.join(folderSrc, item);
-      const d = path.join(folderDest, item);
+  // --- 2. Copy specific root files (metricsmonitor.js) ---
+  const rootFiles = ["metricsmonitor.js"];
+  rootFiles.forEach((file) => {
+    const s = path.join(srcDir, file);
+    const d = path.join(destDir, file);
+    if (fs.existsSync(s)) {
       try {
         fs.copyFileSync(s, d);
         fs.chmodSync(d, 0o664);
-        logInfo(`[MPX] Copied client file: ${d}`);
       } catch (err) {
-        logError("[MPX] Error copying client file:", err);
+        logError(`[MPX] Failed to copy root file '${file}':`, err.message);
       }
-    });
-  });
-
-  const singleFiles = ["metricsmonitor.js"];
-  singleFiles.forEach((file) => {
-    const s = path.join(srcDir, file);
-    const d = path.join(destDir, file);
-    if (!fs.existsSync(s)) return;
-    try {
-      fs.copyFileSync(s, d);
-      fs.chmodSync(d, 0o664);
-      logInfo(`[MPX] Copied client root file: ${file}`);
-    } catch (err) {
-      logError("[MPX] Failed to copy client root file", file, err);
     }
   });
+  logInfo("[MPX] Full client file deployment finished.");
 }
 
-// Run update routines immediately
-updateSettings();
-copyClientFiles();
+
+/**
+ * DEPLOY ONLY JS CLIENT FILES (for config updates)
+ * Copies only the regenerated .js files to the web deployment directory.
+ */
+function copyOnlyJsFiles() {
+    if (process.platform === "win32") return;
+
+    const srcDir = __dirname;
+    const destDir = path.join(__dirname, "../../web/js/plugins/MetricsMonitor");
+
+    logInfo("[MPX] Deploying updated JavaScript files to web directory...");
+
+    // --- 1. Copy JS subdirectory content ---
+    const jsFolderSrc = path.join(srcDir, "js");
+    const jsFolderDest = path.join(destDir, "js");
+
+    if (fs.existsSync(jsFolderSrc)) {
+        try {
+            fs.mkdirSync(jsFolderDest, { recursive: true });
+            fs.chmodSync(jsFolderDest, 0o775);
+        } catch (err) {
+            logError(`[MPX] Failed to create subdirectory ${jsFolderDest}:`, err.message);
+            return;
+        }
+
+        const jsFiles = fs.readdirSync(jsFolderSrc).filter(f => f.endsWith('.js'));
+        jsFiles.forEach((file) => {
+            const s = path.join(jsFolderSrc, file);
+            const d = path.join(jsFolderDest, file);
+            try {
+                fs.copyFileSync(s, d);
+                fs.chmodSync(d, 0o664);
+            } catch (err) {
+                logError(`[MPX] Error copying JS file (js/${file}):`, err.message);
+            }
+        });
+    }
+
+    // --- 2. Copy root metricsmonitor.js file ---
+    const rootJsFile = "metricsmonitor.js";
+    const s = path.join(srcDir, rootJsFile);
+    const d = path.join(destDir, rootJsFile);
+    if (fs.existsSync(s)) {
+        try {
+            fs.copyFileSync(s, d);
+            fs.chmodSync(d, 0o664);
+        } catch (err) {
+            logError(`[MPX] Failed to copy root file '${rootJsFile}':`, err.message);
+        }
+    }
+    logInfo("[MPX] JavaScript file deployment finished.");
+}
+
+/**
+ * Orchestrates the full update and deployment of client files.
+ */
+function updateAllClientFiles() {
+    logInfo("[MPX Config] Starting initial client file update and deployment...");
+    updateSettings();
+    copyAllClientFiles(); // Use the full copy function here
+    logInfo("[MPX Config] Initial client file deployment process finished.");
+}
+
+// ====================================================================================
+//  REAL-TIME CONFIGURATION WATCHER
+// ====================================================================================
+
+let watcher = null; // Variable to hold the watcher instance
+let isUpdating = false; // Flag to prevent re-triggering during an update
+
+/**
+ * Reloads configuration, updates all variables, regenerates client files,
+ * and deploys ONLY the changed JS files to the web directory.
+ */
+function handleFileChange() {
+    if (isUpdating) {
+        return; // Exit if an update is already in progress
+    }
+    
+    isUpdating = true; // Set lock
+    logInfo(`[MPX Config] File change detected. Starting update process...`);
+
+    // Temporarily stop watching to prevent loops
+    if (watcher) {
+        watcher.close();
+    }
+
+    setTimeout(() => {
+        try {
+            reloadAndApplyConfig();   // Reloads and applies server-side variables
+            updateSettings();         // Rewrites client-side JS files with new config
+            copyOnlyJsFiles();        // Deploys only the changed JS files
+            logInfo("[MPX Config] Update process completed successfully.");
+        } catch (error) {
+            logError("[MPX Config] An error occurred during the update process:", error);
+        } finally {
+            // IMPORTANT: Re-enable the watcher after the update is complete
+            setupFileWatcher();
+
+            // Release lock after a short delay to allow file system to settle
+            setTimeout(() => {
+                isUpdating = false;
+            }, 1000);
+        }
+    }, 500);
+}
+
+/**
+ * Sets up a file watcher on the configuration file to enable real-time updates.
+ */
+function setupFileWatcher() {
+    // Ensure any old watcher is closed before starting a new one
+    if (watcher) {
+        watcher.close();
+    }
+    logInfo(`[MPX Config] Setting up file watcher for: ${path.basename(configFilePath)}`);
+    // Use 'fs.watch' for better cross-platform compatibility and stability
+    watcher = fs.watch(configFilePath, { persistent: false }, (eventType) => {
+        if (eventType === 'change') {
+            handleFileChange();
+        }
+    });
+}
+
+// ====================================================================================
+//  INITIAL SETUP
+// ====================================================================================
+
+// 1. Initial load of the configuration
+reloadAndApplyConfig();
+
+// 2. Initial update and copy of client files
+updateAllClientFiles();
+
+// 3. Setup the file watcher for real-time updates
+setupFileWatcher();
 
 // ====================================================================================
 //  MAIN SERVER LOGIC START
@@ -1140,6 +1352,7 @@ if (!ENABLE_MPX) {
   // ====================================================================================
   let dataPluginsWs = null;
   let reconnectTimer = null;
+  let backpressureHits = 0;
   const MAX_BACKPRESSURE_HITS = 200;
 
   function connectDataPluginsWs() {
@@ -1205,6 +1418,9 @@ if (!ENABLE_MPX) {
   let goertzelWindowPrecision = null;
   let goertzelWindowFast = null;
   
+  // Storage for Flat-Top window (for amplitude accuracy)
+  let goertzelWindowFlatTop = null;
+
   let currentMaxPeak = 0;
   let currentPilotPeak = 0;
   let currentRdsPeak = 0;
@@ -1212,6 +1428,14 @@ if (!ENABLE_MPX) {
   
   let currentMonoPeak = 0;
   let currentStereoPeak = 0;
+  
+  // Auto-Pilot Frequency Search Variables
+  let detectedPilotFreq = 19000;
+  let pilotSearchCounter = 0;
+  const PILOT_SEARCH_INTERVAL = 5; // Search every 5 blocks
+
+  // DC Offset Tracking
+  let dcOffset = 0;
 
   let fftBlock = null;
   let windowHann = null;
@@ -1227,25 +1451,44 @@ if (!ENABLE_MPX) {
   let latestMpxFrame = null;
 
   /**
-   * Initialize BOTH Hann Windows (Precision & Fast)
+   * Initialize Windows (Precision, Fast, and Flat-Top)
    */
   function initGoertzelWindow() {
-    // 1. Precision Window (2048)
+    // 1. Precision Window (Hann)
     goertzelWindowPrecision = new Float32Array(WIN_PRECISION);
     for (let i = 0; i < WIN_PRECISION; i++) {
       goertzelWindowPrecision[i] =
         0.5 * (1 - Math.cos((2 * Math.PI * i) / (WIN_PRECISION - 1)));
     }
 
-    // 2. Fast Window (256)
+    // 2. Fast Window (Hann)
     goertzelWindowFast = new Float32Array(WIN_FAST);
     for (let i = 0; i < WIN_FAST; i++) {
       goertzelWindowFast[i] =
         0.5 * (1 - Math.cos((2 * Math.PI * i) / (WIN_FAST - 1)));
     }
 
+    // 3. Flat-Top Window (for precise amplitude measurement)
+    // Formula: w[n] = a0 - a1*cos(2pi*n/N) + a2*cos(4pi*n/N) - a3*cos(6pi*n/N)
+    // Using standard coefficients for a general-purpose flat-top window
+    goertzelWindowFlatTop = new Float32Array(WIN_PRECISION);
+    const a0 = 0.21557895;
+    const a1 = 0.41663158;
+    const a2 = 0.277263158;
+    const a3 = 0.083578947;
+    const a4 = 0.006947368;
+    for (let i = 0; i < WIN_PRECISION; i++) {
+        const n = i;
+        const N = WIN_PRECISION - 1;
+        goertzelWindowFlatTop[i] = a0
+            - a1 * Math.cos((2 * Math.PI * n) / N) 
+            + a2 * Math.cos((4 * Math.PI * n) / N) 
+            - a3 * Math.cos((6 * Math.PI * n) / N)
+            + a4 * Math.cos((8 * Math.PI * n) / N);
+    }
+
     logInfo(
-      `[MPX] Hybrid Analyzer initialized. Precision: ${WIN_PRECISION}, Fast: ${WIN_FAST}`
+      `[MPX] Hybrid Analyzer initialized. Precision: ${WIN_PRECISION}, Fast: ${WIN_FAST}, Flat-Top Active`
     );
   }
 
@@ -1266,18 +1509,22 @@ if (!ENABLE_MPX) {
     const coeff = 2.0 * cosine;
 
     let q0 = 0, q1 = 0, q2 = 0;
+    let windowSum = 0;
 
     for (let i = 0; i < len; i++) {
       const windowedSample = samples[i] * windowArray[i];
       q0 = coeff * q1 - q2 + windowedSample;
       q2 = q1;
       q1 = q0;
+      windowSum += windowArray[i];
     }
 
     const real = q1 - q2 * cosine;
     const imag = q2 * sine;
-
-    return (Math.sqrt(real * real + imag * imag) * 2.0) / len * 2.0;
+    
+    // Proper normalization for Goertzel requires dividing by the sum of window coefficients, not just N.
+    const magnitude = Math.sqrt(real * real + imag * imag);
+    return (magnitude * 2.0) / windowSum;
   }
    
   // ====================================================================================
@@ -1398,283 +1645,361 @@ if (!ENABLE_MPX) {
   }
 
   // ====================================================================================
-  //  PCM Sampling
+  //  PCM Sampling & Signal Processing (Optimized Multi-Band Scan)
   // ====================================================================================
-  
-  // We store the last measurement values to bridge gaps in modulation.
+
+  // Buffer for history
   let rdsHistoryBuffer = [];
-  const RDS_HISTORY_SIZE = 40; // Approx. 1-2 seconds of history at typical chunk rates
+  const RDS_HISTORY_SIZE = 50; 
 
-  // Frequencies: Focus on the energetic sidebands (55.5 - 58.5)
-  const RDS_SCAN_FREQUENCIES = [
-      55800, 55850, 55900, 55950, 56000, 56050, 56100, 56150, 56200, 57800, 57850, 57900, 57950, 58000, 58050, 58100, 58150, 58200
-  ];
+  // --- PERFORMANCE OPTIMIZATION: CACHES ---
+  let rdsCoeffCache = null;
+  let monoCoeffCache = null;
+  let stereoCoeffCache = null;
+  let cachedSampleRate = 0;
+  
+  // Scan Parameters
+  const RDS_START = 55000, RDS_END = 59000, RDS_STEP = 50;    
+  const MONO_START = 100, MONO_END = 15000, MONO_STEP = 1000;  
+  const STEREO_START = 23000, STEREO_END = 53000, STEREO_STEP = 2000; 
 
-  function handlePcmChunk(chunk) {
+  // Helper to build a coefficient cache
+  function buildCoeffCache(startFreq, endFreq, stepFreq, rate) {
+      let cache = [];
+      for (let f = startFreq; f <= endFreq; f += stepFreq) {
+          const omega = (2.0 * Math.PI * f) / rate;
+          cache.push({
+              coeff: 2.0 * Math.cos(omega),
+              cosine: Math.cos(omega), 
+              sine: Math.sin(omega)
+          });
+      }
+      return cache;
+  }
+
+  // Helper for fast energy calculation using a cache
+  function calculateBandEnergy(buffer, cache, window) {
+      let energySum = 0;
+      const len = buffer.length;
+      let windowSum = 0;
+      for (let i=0; i<window.length; i++) windowSum += window[i];
+      
+      for (let k = 0; k < cache.length; k++) {
+          const item = cache[k];
+          const coeff = item.coeff;
+          let q0 = 0, q1 = 0, q2 = 0;
+          for (let i = 0; i < len; i++) {
+              q0 = coeff * q1 - q2 + (buffer[i] * window[i]);
+              q2 = q1;
+              q1 = q0;
+          }
+          const real = q1 - q2 * item.cosine; 
+          const imag = q2 * item.sine;       
+          const mag_sq = real * real + imag * imag;
+          energySum += mag_sq * (4.0 / (windowSum * windowSum));
+      }
+      return energySum / cache.length;
+  }
+
+  /**
+   * Helper: Oversampling / True Peak Estimation
+   * Estimates the true peak between two samples. For efficiency,
+   * this uses a simple heuristic: if samples are high, assume the peak is higher.
+   */
+  function estimateTruePeak(s1, s2) {
+      const a = Math.abs(s1);
+      const b = Math.abs(s2);
+      // A full sinc interpolation is too CPU intensive here.
+      // This approximation adds headroom for potential inter-sample peaks.
+      if (a > 0.5 && b > 0.5) {
+          return Math.max(a, b) * 1.05; // Add 5% headroom
+      }
+      return Math.max(a, b);
+  }
+
+function handlePcmChunk(chunk) {
     if (!chunk.length) return;
     
     const processingRate = (SAMPLE_RATE && SAMPLE_RATE > 0) ? SAMPLE_RATE : 48000;
+    
     if (ENABLE_GOERTZEL && !goertzelWindowPrecision) initGoertzelWindow();
+
+    if (!rdsCoeffCache || cachedSampleRate !== processingRate) {
+        cachedSampleRate = processingRate;
+        rdsCoeffCache = buildCoeffCache(RDS_START, RDS_END, RDS_STEP, processingRate);
+        monoCoeffCache = buildCoeffCache(MONO_START, MONO_END, MONO_STEP, processingRate);
+        stereoCoeffCache = buildCoeffCache(STEREO_START, STEREO_END, STEREO_STEP, processingRate);
+        logInfo(`[MPX] Optimized Scan Caches rebuilt: Mono=${monoCoeffCache.length}, Stereo=${stereoCoeffCache.length}, RDS=${rdsCoeffCache.length} steps.`);
+    }
 
     let meterBuffer = []; 
 
-    // --- 1. DECODE PCM DATA ---
     if (use3LasPcmFormat) {
         const intData = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
         for (let i = 0; i < intData.length; i += 2) {
-            const v = ((intData[i]/32768.0) + ((intData[i+1]??intData[i])/32768.0))*0.5;
+            let v = ((intData[i]/32768.0) + ((intData[i+1]??intData[i])/32768.0))*0.5;
+            
+            // --- DC Offset Removal (High Pass Filter) ---
+            dcOffset = (dcOffset * 0.995) + (v * 0.005);
+            v = v - dcOffset;
+
             if (ENABLE_FFT) sampleBuffer.push(v * SPECTRUM_GAIN_FACTOR);
             if (ENABLE_GOERTZEL) meterBuffer.push(v * METER_GAIN_FACTOR);
         }
     } else {
         const floatData = new Float32Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 4);
         for (let i = 0; i < floatData.length; i += 2) {
-            const v = (floatData[i] + (floatData[i+1]??floatData[i]))*0.5;
+            let v = (floatData[i] + (floatData[i+1]??floatData[i]))*0.5;
+
+            // --- DC Offset Removal (High Pass Filter) ---
+            dcOffset = (dcOffset * 0.995) + (v * 0.005);
+            v = v - dcOffset;
+
             if (ENABLE_FFT) sampleBuffer.push(v * SPECTRUM_GAIN_FACTOR);
             if (ENABLE_GOERTZEL) meterBuffer.push(v * METER_GAIN_FACTOR);
         }
     }
 
-    // --- 2. METER LOGIC ---
     if (ENABLE_GOERTZEL) {
         let chunkMax = 0;
-        for (let i = 0; i < meterBuffer.length; i++) {
-          let val = Math.abs(meterBuffer[i]);
-          if (val > chunkMax) chunkMax = val;
-          if (goertzelWindowPrecision) goertzelAccumulator.push(meterBuffer[i]);
+        
+        // --- True Peak Detection ---
+        for (let i = 0; i < meterBuffer.length - 1; i++) {
+            const v1 = meterBuffer[i];
+            const v2 = meterBuffer[i+1];
+            
+            // Estimate inter-sample peak
+            const truePeak = estimateTruePeak(v1, v2);
+            if (truePeak > chunkMax) chunkMax = truePeak;
+
+            if (goertzelAccumulator.length < WIN_PRECISION) {
+                goertzelAccumulator.push(v1);
+            }
         }
         
         if (chunkMax >= currentMaxPeak) currentMaxPeak = chunkMax;
         else currentMaxPeak = currentMaxPeak * 0.95 + chunkMax * 0.05;
 
-        if (goertzelAccumulator.length > WIN_PRECISION * 4) goertzelAccumulator = goertzelAccumulator.slice(-WIN_PRECISION);
-
-        while (goertzelAccumulator.length >= WIN_PRECISION) {
-            const chunkBig = goertzelAccumulator.slice(0, WIN_PRECISION);
-            const chunkFast = chunkBig.slice(WIN_PRECISION - WIN_FAST);
-            goertzelAccumulator = goertzelAccumulator.slice(Math.floor(WIN_PRECISION * 0.5));
+        if (goertzelAccumulator.length >= WIN_PRECISION) {
+            const workBuffer = goertzelAccumulator; 
             
-            const pilot = calculateGoertzelWindowed(chunkBig, 19000, processingRate, goertzelWindowPrecision);
-            
-            // --- RDS STABILITY LOGIC ---
-            // 1. Find the strongest point in the spectrum for this moment
-            let momentMaxRds = 0;
-            for (let f of RDS_SCAN_FREQUENCIES) {
-                let amp = calculateGoertzelWindowed(chunkBig, f, processingRate, goertzelWindowPrecision);
-                if (amp > momentMaxRds) momentMaxRds = amp;
+            // --- Automatic Pilot Frequency Search ---
+            pilotSearchCounter++;
+            if (pilotSearchCounter >= PILOT_SEARCH_INTERVAL) {
+                pilotSearchCounter = 0;
+                let maxPilotAmp = 0;
+                let bestFreq = 19000;
+                for (let f = 18950; f <= 19050; f += 5) {
+                    const amp = calculateGoertzelWindowed(workBuffer, f, processingRate, goertzelWindowPrecision);
+                    if (amp > maxPilotAmp) {
+                        maxPilotAmp = amp;
+                        bestFreq = f;
+                    }
+                }
+                if (maxPilotAmp > 0.005) { // Only update if signal is strong enough
+                    detectedPilotFreq = bestFreq;
+                } else {
+                     detectedPilotFreq = 19000; // Reset to default if no pilot found
+                }
             }
-            
-            // 2. Push into history buffer
-            rdsHistoryBuffer.push(momentMaxRds);
-            if (rdsHistoryBuffer.length > RDS_HISTORY_SIZE) rdsHistoryBuffer.shift();
-            
-            // 3. Calculate robust value from history
-            // We sort the history and take the median of the upper half.
-            // This ignores "zeros" (modulation gaps) and "spikes" (interference).
-            let sortedHistory = [...rdsHistoryBuffer].sort((a, b) => b - a);
-            // Take the value at index 5 (from the top). This is a stable "high" value, but not a single outlier.
-            let stableIndex = Math.floor(sortedHistory.length * 0.2); // Top 20% Percentile
-            if (stableIndex >= sortedHistory.length) stableIndex = 0;
-            let stableRds = sortedHistory[stableIndex] || 0;
 
-            const n1 = calculateGoertzelWindowed(chunkBig, 17000, processingRate, goertzelWindowPrecision); 
-            const n2 = calculateGoertzelWindowed(chunkBig, 21000, processingRate, goertzelWindowPrecision); 
-            const avgNoise = (n1 + n2) / 2.0;
+            const noiseFrequencies = [17000, 21000, 54000, 60000, 70000, 80000];
+            let totalNoisePower = 0;
+            for (const freq of noiseFrequencies) {
+                const amp = calculateGoertzelWindowed(workBuffer, freq, processingRate, goertzelWindowPrecision);
+                totalNoisePower += (amp * amp);
+            }
+            const averageNoisePower = totalNoisePower / noiseFrequencies.length;
+            const noiseAmp = Math.sqrt(averageNoisePower);
             
-            // Mono / Stereo (simplified for performance)
-            let maxMono = 0;
-            for(let f=100; f<=15000; f+=2000) maxMono += calculateGoertzelWindowed(chunkFast, f, processingRate, goertzelWindowFast);
-            maxMono /= 8;
+            currentNoiseFloor = noiseAmp;
 
-            let maxStereo = 0;
-            for(let f=24000; f<=52000; f+=4000) maxStereo += calculateGoertzelWindowed(chunkFast, f, processingRate, goertzelWindowFast);
-            maxStereo /= 8;
+            // --- Use Flat-Top Window for Pilot & RDS amplitude ---
+            let pilotAmp = calculateGoertzelWindowed(workBuffer, detectedPilotFreq, processingRate, goertzelWindowFlatTop);
+            
+            let isPilotPresent = (pilotAmp > noiseAmp * 1.8);
+            let pilot = isPilotPresent ? pilotAmp : 0;
+            
+            let avgRdsPower = calculateBandEnergy(workBuffer, rdsCoeffCache, goertzelWindowFlatTop);
+            currentRdsPeak = Math.sqrt(avgRdsPower);
 
-            currentNoiseFloor = currentNoiseFloor * 0.90 + avgNoise * 0.10;
+            // Use Hann window for energy calculation of Mono and Stereo bands
+            let avgMonoPower = calculateBandEnergy(workBuffer, monoCoeffCache, goertzelWindowPrecision);
+            let cleanMonoPower = Math.max(0, avgMonoPower - (averageNoisePower * 0.2));
+            let monoRms = Math.sqrt(cleanMonoPower);
+
+            let avgStereoPower = calculateBandEnergy(workBuffer, stereoCoeffCache, goertzelWindowPrecision);
+            let cleanStereoPower = Math.max(0, avgStereoPower - averageNoisePower);
+            let stereoRms = isPilotPresent ? Math.sqrt(cleanStereoPower) : 0;
+
             currentPilotPeak = currentPilotPeak * 0.85 + pilot * 0.15;
-            
-            // Here we pass the STABILIZED value from the buffer
-            currentRdsPeak = currentRdsPeak * 0.8 + stableRds * 0.2;
-            
-            currentMonoPeak = currentMonoPeak * 0.5 + maxMono * 0.5;
-            currentStereoPeak = currentStereoPeak * 0.5 + maxStereo * 0.5;
+            currentMonoPeak = currentMonoPeak * 0.7 + monoRms * 0.3;
+            currentStereoPeak = currentStereoPeak * 0.7 + stereoRms * 0.3;
+
+            goertzelAccumulator = [];
         }
     }
 
-    // --- 3. FFT ---
+    // --- FFT ---
     if (ENABLE_FFT && fftReady && sampleBuffer.length >= FFT_SIZE) {
         if (sampleBuffer.length > MAX_LATENCY_BLOCKS * FFT_SIZE) sampleBuffer.splice(0, sampleBuffer.length - MAX_LATENCY_BLOCKS * FFT_SIZE);
         const start = sampleBuffer.length - FFT_SIZE;
         for(let i=0; i<FFT_SIZE; i++) fftBlock[i] = sampleBuffer[start+i] * windowHann[i];
         
-        // FFT Fallback Safety (same as before)
-        if (typeof FFT !== 'function' && !pffftModule) {
-             try { const _fftLib = require("fft-js"); FFT = _fftLib.fft || _fftLib; } catch(e) { return; }
-        }
-
-        if (pffftModule || typeof FFT === 'function') {
-             // ... FFT calculation code (same as before) ...
-             let mags = new Float32Array(FFT_SIZE/2);
-             if (pffftModule) {
-                pffftInputHeap.set(fftBlock);
-                pffftModule._pffft_transform_ordered(pffftSetup, pffftInputPtr, pffftOutputPtr, pffftWorkPtr, 0);
-                for(let i=0; i<FFT_SIZE/2; i++) {
-                    const re = pffftOutputHeap[2*i], im = pffftOutputHeap[2*i+1];
-                    mags[i] = (Math.sqrt(re*re + im*im)/(FFT_SIZE/2)) * (i>0?10:1);
-                }
-             } else {
-                 try {
-                    const phasors = FFT(fftBlock);
-                    for(let i=0; i<FFT_SIZE/2; i++) mags[i] = (Math.sqrt(phasors[i][0]**2 + phasors[i][1]**2)/(FFT_SIZE/2)) * (i>0?10:1);
-                 } catch(e) {}
-             }
-             
-             const mpx = [];
-             for (let i = 0; i < FFT_SIZE/2; i+=2) {
-                if ((i*processingRate/FFT_SIZE) > 100000) break;
-                mpx.push(Math.round(mags[i]*100000)/100000);
-             }
-             if (mpx.length) latestMpxFrame = mpx;
+        let mags;
+        if (pffftModule) {
+            pffftInputHeap.set(fftBlock);
+            pffftModule._pffft_transform_ordered(pffftSetup, pffftInputPtr, pffftOutputPtr, pffftWorkPtr, 0);
+            mags = new Float32Array(FFT_SIZE / 2);
+            for(let i=0; i<FFT_SIZE/2; i++) {
+                const re = pffftOutputHeap[2*i], im = pffftOutputHeap[2*i+1];
+                mags[i] = (Math.sqrt(re*re + im*im)/(FFT_SIZE/2)) * (i>0?10:1);
+            }
+        } else if (typeof FFT === 'function') {
+            try {
+                const phasors = FFT(fftBlock);
+                mags = new Float32Array(FFT_SIZE / 2);
+                for(let i=0; i<FFT_SIZE/2; i++) mags[i] = (Math.sqrt(phasors[i][0]**2 + phasors[i][1]**2)/(FFT_SIZE/2)) * (i>0?10:1);
+            } catch(e) {}
         }
         
-        const keep = Math.max(0, sampleBuffer.length - HOP_SIZE);
+        if (mags) {
+            const mpx = [];
+            for (let i = 0; i < mags.length; i+=2) {
+                if ((i*processingRate/FFT_SIZE) > 100000) break;
+                mpx.push(Math.round(mags[i]*100000)/100000);
+            }
+            if (mpx.length) latestMpxFrame = mpx;
+        }
+        
+        const keep = Math.max(0, sampleBuffer.length - (FFT_SIZE / 2));
         if (keep > 0) sampleBuffer.splice(0, keep); else sampleBuffer.length = 0;
     }
-  }
+}
 
-  // ====================================================================================
-  //  MAIN BROADCAST LOOP
-  // ====================================================================================
+// ====================================================================================
+//  MAIN BROADCAST LOOP (V2.4 - Summen-Modus / Config-gesteuert)
+// ====================================================================================
 
-  const PILOT_SCALE_KHZ_PER_AMP = 1100.0;
-  const RDS_SCALE_KHZ_PER_AMP = 8000.0; 
-  const MPX_SCALE_KHZ_PER_AMP = 148.0;      
-  const MONO_SCALE_KHZ_PER_AMP = 7000.0;     
-  const STEREO_SCALE_KHZ_PER_AMP = 4000.0;  
+if (typeof global.mpxPeakState === 'undefined') {
+  global.mpxPeakState = 0;
+  global.pilotFastAvg = 0;
+  global.rdsStableValue = 0;
+  global.mpxDisplayPeak = 0;
+  global.logThrottle = 0;
+  global.monoRawSmoother = 0;
+  global.stereoRawSmoother = 0;
+}
 
-  let out_mpx = 0, out_pilot = 0, out_rds = 0;
-
-  if (typeof global.mpxPeakState === 'undefined') global.mpxPeakState = 0;
-  if (typeof global.pilotFastAvg === 'undefined') global.pilotFastAvg = 0;
-  if (typeof global.rdsStableValue === 'undefined') global.rdsStableValue = 0;
-  if (typeof global.mpxDisplayPeak === 'undefined') global.mpxDisplayPeak = 0;
-  if (typeof global.logThrottle === 'undefined') global.logThrottle = 0;
-  if (typeof global.monoDevSmoother === 'undefined') global.monoDevSmoother = 0;
-  if (typeof global.stereoIntegrator === 'undefined') global.stereoIntegrator = 0;
-  if (typeof global.lastStableMode === 'undefined') global.lastStableMode = false;
-
-  setInterval(() => {
+setInterval(() => {
     if (!dataPluginsWs || dataPluginsWs.readyState !== WebSocket.OPEN) return;
-    if (dataPluginsWs.bufferedAmount > 262144) { if (++backpressureHits >= 50) { try { dataPluginsWs.terminate(); } catch {} dataPluginsWs = null; } return; }
+    if (dataPluginsWs.bufferedAmount > MAX_WS_BACKLOG_BYTES) {
+        if (++backpressureHits >= MAX_BACKPRESSURE_HITS) {
+            try { dataPluginsWs.terminate(); } catch {}
+            dataPluginsWs = null;
+        }
+        return;
+    }
     backpressureHits = 0;
 
-    let rP = 0, rR = 0, rM = 0, rN = 0.000001, rMono = 0, rStereo = 0;
-    
+    let rP = 0, rR = 0, rM = 0, rN = 1e-6, rMono = 0, rStereo = 0;
     if (ENABLE_GOERTZEL) {
         rP = currentPilotPeak;
-        rR = currentRdsPeak; 
-        rM = currentMaxPeak;
-        rN = currentNoiseFloor || 0.000001;
+        rR = currentRdsPeak;
+        rM = currentMaxPeak; 
+        rN = currentNoiseFloor || 1e-6;
         rMono = currentMonoPeak;
         rStereo = currentStereoPeak;
     }
 
     // --- 1. PILOT ---
-    let cleanPilot = rP - (rN * 1.5); if (cleanPilot < 0) cleanPilot = 0;
+    const cleanPilot = rP > 1e-5 ? rP : 0;
     global.pilotFastAvg = (global.pilotFastAvg * 0.9) + (cleanPilot * 0.1);
-    let rawPilotKHz = global.pilotFastAvg * PILOT_SCALE_KHZ_PER_AMP;
-    if (rawPilotKHz > 0.5) out_pilot = rawPilotKHz + METER_PILOT_CALIBRATION; else out_pilot = rawPilotKHz; 
+    const rawPilotKHz = global.pilotFastAvg * METER_PILOT_SCALE;
+    let out_pilot = (rawPilotKHz > 0.5) ? rawPilotKHz + METER_PILOT_CALIBRATION : rawPilotKHz;
     if (out_pilot < 0) out_pilot = 0;
 
-    // --- 2. RDS (STABILIZED) ---
-    // Since we have the stable value from the buffer, we hardly need noise subtraction anymore.
-    let cleanRds = rR - (rN * 0.8); 
-    if (cleanRds < 0) cleanRds = 0;
-    
-    let rawRdsKHz = cleanRds * RDS_SCALE_KHZ_PER_AMP;
+    // --- 2. RDS ---
+    const targetRdsKHz = (rR * METER_RDS_SCALE) + METER_RDS_CALIBRATION;
+    const smoothingFactor = 0.05;
+    global.rdsStableValue = (global.rdsStableValue * (1 - smoothingFactor)) + (targetRdsKHz * smoothingFactor);
+    let out_rds = global.rdsStableValue > 0 ? global.rdsStableValue : 0;
+    if (out_rds > 15.0) out_rds = 15.0;
 
-    // Calibration Offset
-    if (rawRdsKHz > 0.5) rawRdsKHz += METER_RDS_CALIBRATION;
+    // --- 3. MONO & STEREO ---
+    const monoRawAttack = (rMono > global.monoRawSmoother) ? 0.2 : 0.05;
+    global.monoRawSmoother = (global.monoRawSmoother * (1 - monoRawAttack)) + (rMono * monoRawAttack);
     
-    // Limits
-    if (rawRdsKHz < 0.2) rawRdsKHz = 0; 
-    if (rawRdsKHz > 12.0) rawRdsKHz = 12.0; 
+    const stereoRawAttack = (rStereo > global.stereoRawSmoother) ? 0.2 : 0.05;
+    global.stereoRawSmoother = (global.stereoRawSmoother * (1 - stereoRawAttack)) + (rStereo * stereoRawAttack);
+
+    // Hier greifen jetzt Ihre Config-Werte voll durch:
+    const out_mono_dev = global.monoRawSmoother * METER_MONO_SCALE;
+    const out_stereo_dev = global.stereoRawSmoother * METER_STEREO_SCALE;
+
+    // === MAIN MPX METER (SUM CALCULATION) ===
+    // Jetzt addieren wir die Komponenten. 
+    // Das bedeutet: Wenn Sie MonoScale erhöhen, steigt auch Total MPX.
+    let calcMpx = out_mono_dev + out_stereo_dev + out_pilot + out_rds;
     
-    // Smoothing: A normal low-pass is sufficient here, as the buffer has already removed wild jumps.
-    let sm = (rawRdsKHz > 0) ? 0.02 : 0.05;
-    global.rdsStableValue = (global.rdsStableValue * (1-sm)) + (rawRdsKHz * sm);
-    out_rds = global.rdsStableValue;
-
-    // --- 3. REST (MONO/STEREO/MPX) ---
-    let cleanMono = rMono - (rN * 4.0); if (cleanMono < 0) cleanMono = 0;
-    let rawMonoDev = cleanMono * MONO_SCALE_KHZ_PER_AMP;
-    let monoAttack = (rawMonoDev > global.monoDevSmoother) ? 0.15 : 0.10;
-    global.monoDevSmoother = (global.monoDevSmoother * (1 - monoAttack)) + (rawMonoDev * monoAttack);
-    let out_mono_dev = global.monoDevSmoother;
-
-    let cleanStereo = rStereo - (rN * 2.5); if (cleanStereo < 0) cleanStereo = 0;
-    let out_stereo_dev = cleanStereo * STEREO_SCALE_KHZ_PER_AMP;
-
-    let instantStereo = (out_pilot > 2.0); 
-
-    if (instantStereo) {
-        global.stereoIntegrator++;
-        if (global.stereoIntegrator > 20) global.stereoIntegrator = 20;
-    } else {
-        global.stereoIntegrator--;
-        if (global.stereoIntegrator < 0) global.stereoIntegrator = 0;
-    }
-    
-    let isStereoStable = (global.stereoIntegrator > 10);
-    if (!isStereoStable && global.stereoIntegrator < 2) global.lastStableMode = false;
-    else if (isStereoStable) global.lastStableMode = true;
-    isStereoStable = global.lastStableMode;
-    global.isStereoLocked = isStereoStable;
-    
-    let calcMpx = 0;
-    if (!isStereoStable) {
-        calcMpx = out_mono_dev + out_pilot + out_rds;
-        if (calcMpx > 1.0) calcMpx = calcMpx * 1.05;
-    } else {
-        let cleanPeak = rM - (rN * 1.5);
-        if (cleanPeak < 0) cleanPeak = 0;
-        let tdMpx = cleanPeak * MPX_SCALE_KHZ_PER_AMP;
-        if (tdMpx > 5.0) tdMpx += METER_MPX_CALIBRATION + 50;
-        if (tdMpx < out_mono_dev) tdMpx = (tdMpx * 0.5) + (out_mono_dev * 0.5);
-        calcMpx = tdMpx;
+    // Optional: Fallback, falls die Summe mal kleiner ist als der echte Peak (selten)
+    // Wir nehmen zur Sicherheit den echten Peak (rM * 107) als Untergrenze, falls die Scales zu niedrig eingestellt sind.
+    // Aber wir lassen zu, dass calcMpx höher wird, wenn Sie die Scales hochdrehen.
+    const truePeakMpx = rM * 107.14; 
+    if (calcMpx < truePeakMpx) {
+        // Soft-Fallback: Wenn Config-Werte zu niedrig sind, nimm True Peak
+        // calcMpx = truePeakMpx; // (Auskommentiert lassen, wenn Sie volle manuelle Kontrolle wollen)
     }
 
+    if (calcMpx > 5.0) {
+        calcMpx += METER_MPX_CALIBRATION;
+    }
+
+    // Gate
+    if (out_pilot < 4.0 && out_rds < 1.0) {
+        calcMpx = 0;
+    }
+
+    // Display Smoothing
     let target = calcMpx;
-    if (target > global.mpxPeakState) global.mpxPeakState = (global.mpxPeakState * 0.85) + (target * 0.15);
-    else global.mpxPeakState = (global.mpxPeakState * 0.98) + (target * 0.02);
-    let finalMpx = global.mpxPeakState;
-    let floor = out_pilot + out_rds;
-    if (finalMpx < floor && finalMpx > 0.5) finalMpx = floor;
-    if (out_pilot < 1.0 && out_rds < 1.0) finalMpx = 0;
-    if (finalMpx > 150.0) finalMpx = 150.0;
-    if (finalMpx >= global.mpxDisplayPeak) global.mpxDisplayPeak = finalMpx;
-    else global.mpxDisplayPeak = (global.mpxDisplayPeak * 0.98) + (finalMpx * 0.02);
-    out_mpx = global.mpxDisplayPeak;
+    const displayAttack = 0.3;
+    const displayDecay = 0.02;
 
+    if (target > global.mpxDisplayPeak) {
+        global.mpxDisplayPeak = (global.mpxDisplayPeak * (1 - displayAttack)) + (target * displayAttack);
+    } else {
+        global.mpxDisplayPeak = (global.mpxDisplayPeak * (1 - displayDecay)) + (target * displayDecay);
+    }
+    
+    let out_mpx = global.mpxDisplayPeak;
+    
+    if (out_mpx > 150.0) out_mpx = 150.0;
+    if (out_mpx < 0) out_mpx = 0;
+
+    // --- LOGGING ---
     if (ENABLE_EXTENDED_LOGGING) {
-        global.logThrottle++;
-        if (global.logThrottle >= 33) { 
+        if (++global.logThrottle >= 33) {
              global.logThrottle = 0;
-             let modeStr = isStereoStable ? "STEREO" : "MONO";
-             let sumCheck = out_mono_dev + out_stereo_dev + out_pilot + out_rds;
-             logInfo(`[MPX] Mode:${modeStr} | Mono:${out_mono_dev.toFixed(1)}k | Pilot:${out_pilot.toFixed(1)}k | Stereo:${out_stereo_dev.toFixed(1)}k | RDS:${out_rds.toFixed(1)}k | SUM_PARTS:${sumCheck.toFixed(1)}k -> MPX:${out_mpx.toFixed(1)} kHz`);
+             // Jetzt sehen Sie im Log: Summe der Teile = Total
+             logInfo(`[MPX] Mono:${out_mono_dev.toFixed(1)}k | Pilot:${out_pilot.toFixed(1)}k | Stereo:${out_stereo_dev.toFixed(1)}k | RDS:${out_rds.toFixed(1)}k -> TOTAL(Sum):${out_mpx.toFixed(1)}k`);
         }
     }
 
     const payload = JSON.stringify({
-      type: "MPX", value: latestMpxFrame||[], peak: out_mpx, pilotKHz: out_pilot, rdsKHz: out_rds,
-      pilot: rP, rds: rR, noise: rN, snr: (rN > 0.000001) ? (rP / rN) : 0
+      type: "MPX", 
+      value: latestMpxFrame || [], 
+      peak: out_mpx, 
+      pilotKHz: out_pilot, 
+      rdsKHz: out_rds,
+      pilot: rP, 
+      rds: rR, 
+      noise: rN, 
+      snr: (rN > 1e-6) ? (rP / rN) : 0
     });
-    
-    currentMaxPeak = 0; 
-    dataPluginsWs.send(payload, ()=>{});
-    
-  }, SPECTRUM_SEND_INTERVAL);
+
+    dataPluginsWs.send(payload, () => {});
+
+}, SPECTRUM_SEND_INTERVAL);
   
   // Cleanup Handlers
   if (FFT_LIBRARY === "pffft.wasm") {
