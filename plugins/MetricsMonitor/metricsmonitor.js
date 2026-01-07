@@ -46,7 +46,7 @@ const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is a
   // =========================================================
   // Plugin version and update check configuration
   // =========================================================
-  const plugin_version = "1.5";
+  const plugin_version = "1.6";
   const updateInfo = true;
 
   const plugin_name = "MetricsMonitor";
