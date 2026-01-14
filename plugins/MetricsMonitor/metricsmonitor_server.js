@@ -427,7 +427,7 @@ function applyConfig(newConfig) {
     
     // Update feature toggles
     isModule2Active = sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
-    ENABLE_MPX = isModule2Active; // Simplified logic as 3LAS is removed
+    ENABLE_MPX = isModule2Active; 
     ENABLE_ANALYZER = ENABLE_MPX;
 
     logInfo("[MPX Config] New configuration has been applied to the server.");
@@ -1099,7 +1099,7 @@ setupFileWatcher();
 //  This is where the actual signal processing loop begins.
 // ====================================================================================
 
-if (!ENABLE_MPX) {
+if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
   logInfo(
     `[MPX] MODULE_SEQUENCE = ${MODULE_SEQUENCE} ? ` +
     "MPX capture & server-side MPX processing are disabled."
@@ -1296,7 +1296,7 @@ if (!ENABLE_MPX) {
   let rec = null;
   let targetDevice = "";
   
-  if (MPX_MODE === "off") {
+  if (MPX_MODE === "off" && MPX_INPUT_CARD === "") {
       logInfo("[MPX] Mode is 'off' -> MPX Capture Disabled.");
   } 
   else {
@@ -1319,7 +1319,7 @@ if (!ENABLE_MPX) {
 
   // --- STARTUP ---
 
-  if (MPX_MODE !== "off" && MPX_EXE_PATH && fs.existsSync(MPX_EXE_PATH)) {
+  if (MPX_MODE !== "off" || (MPX_MODE === "off" && MPX_INPUT_CARD !== "") && MPX_EXE_PATH && fs.existsSync(MPX_EXE_PATH)) {
 
     if (osPlatform !== "win32") {
         try { fs.chmodSync(MPX_EXE_PATH, 0o755); } catch (e) {}
