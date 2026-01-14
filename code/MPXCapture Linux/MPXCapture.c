@@ -8,7 +8,8 @@
  * 
  * Supports dynamic configuration reload from metricsmonitor.json
  * 
- * Compile Linux: gcc -O3 -lm -pthread -o MPXCapture MPXCapture.c
+ * Compile Linux: gcc MPXCapture.c -O3 -ffast-math -lm -o MPXCapture
+ * Compile Linux (max. compatibility): gcc MPXCapture.c -O3 -ffast-math -fno-tree-vectorize -lm -o MPXCapture
  * Compile Win:   cl /O2 MPXCapture.c
  */
 
@@ -264,7 +265,7 @@ static int is_power_of_two(int x) { return x > 0 && ((x & (x - 1)) == 0); }
    MAIN
    ============================================================ */
 
-#define RDS_FFT_SIZE      2048 
+#define RDS_FFT_SIZE      4096 
 #define RMS_CALIB_FACTOR 0.75f 
 
 int main(int argc, char **argv)
