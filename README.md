@@ -16,8 +16,16 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 - The spectrum analyzer now displays the current dB value on the curve for the selected frequency.
 
 ## Important note for this version: 
-- To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
+To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
 https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
+
+## Calibration tool
+
+To calibrate the plugin for correct display of measured values, this tool can be used: https://tef.noobish.eu/logos/MetricsMonitorCalibrationTool.html
+
+The tool works with JSON configuration files from version 1.6 onwards. A short help guide is available on the website.
+
+<img width="320" height="360" alt="image" src="https://github.com/user-attachments/assets/17bcd20d-1a76-40c4-8449-314ff44a5fe7" />
 
 ## Installation notes
 
