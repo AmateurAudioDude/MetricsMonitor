@@ -55,15 +55,13 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 The following variables can be changed in the metricsmonitor.json config file:
 
-    /* Audio & MPX Hardware Settings */
-	
+    /* Audio & MPX Hardware Settings */	
     "sampleRate": 48000,             //  Enter the supported sample rate of the input audio card here: 48000 for displaying the FM audio spectrum / 96000 for displaying the FM baseband and 192000 for the MPX spectrum. The default is 48000.
     "MPXmode": "off",                //  Configure the MPX behavior of the TEF receiver here: "off" = no MPX output / "on" = always MPX output / "auto" = MPX automatic switching (equalizer and signal meter module in stereo - PILOT/MPX/RDS meter module in mono - spectrum analyzer in mono)
     "MPXStereoDecoder": "off",	     //  Set the switch to "on" if you are decoding the stereo signal from MPX with a stereo decoder. This will enable the optical mono/stereo indicator to function when MPXmode is set to "on". The default setting is "off".          
     "MPXInputCard": "",              //  Configure the sound input exclusive to MPX (e.g., for Linux: "plughw:CARD=Device" or Windows: "Microphone (HD USB Audio Device)")
 
     /* Calibration Offsets (Meters) */
-	
     "MeterInputCalibration": 0,      //  Increase or decrease the value as needed to adjust the input for the MPX gauges (Pilot, MPX, RDS). The default value is 0. 
     "MeterPilotCalibration": 0,      //  Calibrate the +/- level value for the Pilot level indicator (default = 0)
     "MeterMPXCalibration": 0,        //  Calibrate the +/- level value for the MPX level indicator (default = 0)
@@ -75,11 +73,9 @@ The following variables can be changed in the metricsmonitor.json config file:
     "MeterRDSScale": 650,            // Scale factor for RDS deviation (default is 650)
 
     /* FFT / Spectrum Settings */
-	
-	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
+	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default and minimum value is 512.
 
     /* Spectrum Visuals */
-	
     "SpectrumInputCalibration": 0,   //  Increase or decrease the value as needed to adjust the input for the spectrum. The default value is 0. 
 	"SpectrumAttackLevel": 3,        //  Response rate of the spectrum display as the signal increases. The default value is 3.
     "SpectrumDecayLevel": 15;        //  This variable determines the number of frames from which a smoothed spectrum is averaged from the raw spectrum. The larger the value, the stronger the smoothing; the smaller the value, the faster and less pronounced the smoothing. The default is 15.
@@ -100,7 +96,6 @@ The following variables can be changed in the metricsmonitor.json config file:
 	"EnableSpectrumOnLoad": false    //  Set to true for automatic startup activation for the Spectrum Graph plugin (default is false).
 
     /* Colors & Peaks */
-	
     "MeterColorSafe": "rgb(0, 255, 0)";       // Change the color here for the safe range of the meter displays. The default is "rgb(0, 255, 0)".
     "MeterColorWarning": "rgb(255, 255,0)";   // Change the color here for the warning range of the meter displays. The default is "rgb(255, 255, 0)".
     "MeterColorDanger": "rgb(255, 0, 0)";     // Change the color here for the danger range of the meter displays. The default is "rgb(255, 0, 0)".
@@ -121,9 +116,10 @@ If the Headless TEF has a line-level audio output, the MPX output can be permane
 Anyone wishing to perform stereo decoding using MPX Tool or similar should use the settings "MPXmode": "on" and "MPXStereoDecoder": "on". This will result in permanent MPX output and stereo signaling on the display.
 
 ## Hardware Configuration Recommendations
-<img width="320" height="240" src="https://github.com/user-attachments/assets/a5137a30-5acb-4802-857f-6a624f815db7" />
-<img width="320" height="240" src="https://github.com/user-attachments/assets/429c8fb2-43ee-4eb1-ae98-06eae1dd0b6f" />
-<img width="320" height="240" src="https://github.com/user-attachments/assets/3cdebe6a-6eb6-4f7f-b7ad-364853d55f26" />
+
+<img width="320" height="240" alt="Folie1" src="https://github.com/user-attachments/assets/d06ae4ea-cd80-4bb4-93a6-3673c0fe68ed" />
+<img width="320" height="240" alt="Folie2" src="https://github.com/user-attachments/assets/380bbe11-e49f-4b22-9036-4df96ef06065" />
+<img width="320" height="240" alt="Folie3" src="https://github.com/user-attachments/assets/4a421fd9-524a-483d-af32-9bbb1f7fa940" />
 
 You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
 
