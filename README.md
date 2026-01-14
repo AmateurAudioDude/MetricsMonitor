@@ -73,7 +73,7 @@ The following variables can be changed in the metricsmonitor.json config file:
     "MeterRDSScale": 650,            // Scale factor for RDS deviation (default is 650)
 
     /* FFT / Spectrum Settings */
-	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
+	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default and minimum value is 512.
 
     /* Spectrum Visuals */
     "SpectrumInputCalibration": 0,   //  Increase or decrease the value as needed to adjust the input for the spectrum. The default value is 0. 
