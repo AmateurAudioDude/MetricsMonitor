@@ -6,26 +6,17 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 <img width="1177" height="174" alt="image" src="https://github.com/user-attachments/assets/82e85238-e51d-4b99-bccf-e70245c5b85f" />
 <img width="1178" height="173" alt="image" src="https://github.com/user-attachments/assets/9d961dc7-fd15-4e52-88a8-6b6680d0cb27" />
 
+## v2.0
 
-
-
-## v1.5
-
-- JSON configuration settings can now be changed on the fly (a server restart is only necessary for selected settings; a browser reload may also be sufficient). 
-- Improved PILOT/RDS detection, MPX detection has been completely reworked, and new variables have been added (see configuration options below).
-- The spectrum analyzer now displays the current dB value on the curve for the selected frequency.
+- Fixed issues with relative image paths
+- Using our own program library for spectrum analysis and display calculation -> more resource-efficient and higher measurement accuracy
+- New scale variables for PILOT, MPX and RDS (see calibration)
 
 ## Important note for this version: 
-To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
-https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
 
-## Calibration tool
-
-To calibrate the plugin for correct display of measured values, this tool can be used: https://tef.noobish.eu/logos/MetricsMonitorCalibrationTool.html
-
-The tool works with JSON configuration files from version 1.6 onwards. A short help guide is available on the website.
-
-<img width="320" height="360" alt="image" src="https://github.com/user-attachments/assets/17bcd20d-1a76-40c4-8449-314ff44a5fe7" />
+- To activate the MPX or spectrum display, the MPX mode must now be set to "on" or "auto" !!!
+- To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
+  https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
 
 ## Installation notes
 
@@ -39,6 +30,26 @@ The tool works with JSON configuration files from version 1.6 onwards. A short h
 8. Configure your personal settings in the automatically created metricsmonitor.json (in the folder: ../fm-dx-webserver-main/plugins_configs)
 9. Stop or close the fm-dx-webserver
 10. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
+
+## How do I calibrate the meter display?
+
+1. Adjust the input value if necessary:
+
+   - If the Pilot, MPX, and RDS meters show no signal level, increase the MeterInputCalibration in increments of 5
+   - If the meters are in the red zone, decrease the MeterInputCalibration in increments of 5
+
+2. Roughly adjust the meter readings (once via Scale):
+
+   - MeterPilotScale: Adjust this up/down (100/50er steps) until you reach approximately 7 kHz.
+   - MeterMPXScale: Adjust this up/down (100/50er steps) until you reach approximately 75 kHz.
+   - MeterRDSScale: Adjust this up/down (100/50er steps)until you reach approximately 2.0 kHz.	
+
+3. Fine-tuning (via Calibration):
+
+   - MeterPilotCalibration Display: 7.2 kHz. Target: 6.7 kHz. -> MeterPilotCalibration: -0.5
+   - MeterMPXCalibration Display: 78 kHz MPX. Target: 75 kHz. -> MeterMPXCalibration: -3.0
+   - MeterRDSCalibration Display: 2.5 kHz RDS. Target: 2.0 kHz. -> MeterRDSCalibration: -0.5
+   
 
 ## Configuration options
 
@@ -59,14 +70,12 @@ The following variables can be changed in the metricsmonitor.json config file:
     "MeterRDSCalibration": 0,        //  Calibrate the +/- level value for the RDS level indicator (default = 0)
 
     /* Meter Scales */
-    "MeterPilotScale": 1000,         // Scale factor for Pilot deviation (kHz per amplitude - default is 1000)
-    "MeterRDSScale": 16500,          // Scale factor for RDS deviation (kHz per amplitude - default is 16500)
-    "MeterMonoScale": 5000,          // Scale factor for Mono (L+R) audio deviation (kHz per amplitude - default is 5000)
-    "MeterStereoScale": 1300,        // Scale factor for Stereo (L-R) audio deviation (kHz per amplitude - default is 1300)
+    "MeterPilotScale": 200,          // Scale factor for Pilot deviation (default is 200)
+    "MeterMPXScale": 100,            // Scale factor for MPX deviation (default is 100)
+    "MeterRDSScale": 650,            // Scale factor for RDS deviation (default is 650)
 
     /* FFT / Spectrum Settings */
 	
-    "fftLibrary": "fft-js",          //  For modern CPUs, change the desired FFT library to "pffft.wasm" (6-16x faster). "pffft.wasm" requires Node.js v14+ and works best with 64-bit operating systems / Node.js v16.4+ for SIMD support / x86-64, Apple Silicon, RPi 4/5. Default is "fft-js".
 	"fftSize": 512,                  //  Change the frequency sampling rate for the spectrum display. The higher the value (e.g. 256, 1024, 2048, 4096), the better the frequency resolution, but also the higher the CPU load. The default is 512.
 
     /* Spectrum Visuals */

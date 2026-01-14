@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  metricsmonitor-audiometer.js                    (V1.6)   //
+//  metricsmonitor-audiometer.js                    (V2.0)   //
 //                                                           //
-//  by Highpoint               last update: 07.01.2026       //
+//  by Highpoint               last update: 14.01.2026       //
 //                                                           //
 //  Thanks for support by                                    //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
@@ -20,11 +20,8 @@ const MeterInputCalibration = 0;    // Do not touch - this value is automaticall
 const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const MeterPilotScale = 1000;    // Do not touch - this value is automatically updated via the config file
-const MeterRDSScale = 16500;    // Do not touch - this value is automatically updated via the config file
-const MeterMonoScale = 5000;    // Do not touch - this value is automatically updated via the config file
-const MeterStereoScale = 1300;    // Do not touch - this value is automatically updated via the config file
-const fftLibrary = "fft-js";    // Do not touch - this value is automatically updated via the config file
+const MeterPilotScale = 200;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSScale = 650;    // Do not touch - this value is automatically updated via the config file
 const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
 const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file

@@ -1,11 +1,11 @@
 //////////////////////////////////////////////////////////////////
 //                                                              //
-//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER  (V1.6)    //
+//  METRICSMONITOR SERVER SCRIPT FOR FM-DX-WEBSERVER  (V2.0)    //
 //                                                              //
-//  by Highpoint               last update: 07.01.2026          //
+//  by Highpoint               last update: 14.01.2026          //
 //                                                              //
 //  Thanks for support by                                       //
-//  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude         //
+//  Jeroen Platenkamp, Bkram, Wtkyl, AmateurAudioDude         //
 //                                                              //
 //  https://github.com/Highpoint2000/metricsmonitor             //
 //                                                              //
@@ -53,22 +53,20 @@ const defaultConfig = {
   sampleRate: 48000,            // The sample rate for capture (Hz)
   MPXmode: "off",               // Mode switch (off/auto/on)
   MPXStereoDecoder: "off",      // Internal stereo decoder switch
-  MPXInputCard: "",             // Input device name (if empty, tries to use 3LAS)
+  MPXInputCard: "",             // Input device name (if empty, uses config.json device)
 
   // 2. Calibration Offsets (Meters)
-  MeterInputCalibration: 0.0,   // Input Gain Calibration in dB (applies to MPX METERS only)
-  MeterPilotCalibration: 0.0,	// Pilot Calibration in dB
-  MeterMPXCalibration: 0.0,     // MPX Calibration in dB
-  MeterRDSCalibration: 0.0,     // RDS Calibration in dB
+  MeterInputCalibration: 0.0,
+  MeterPilotCalibration: 0.0,
+  MeterMPXCalibration: 0.0,
+  MeterRDSCalibration: 0.0,
 
-  // 3. Meter Scales
-  MeterPilotScale: 1000,        // Scale factor for Pilot deviation (kHz per amplitude)
-  MeterRDSScale: 16500,         // Scale factor for RDS deviation (kHz per amplitude)
-  MeterMonoScale: 5000,         // Scale factor for Mono (L+R) audio deviation (kHz per amplitude)
-  MeterStereoScale: 1300,       // Scale factor for Stereo (L-R) audio deviation (kHz per amplitude)
+  // 3. Meter Scales 
+  MeterPilotScale: 200.0,       // Default factor for Pilot
+  MeterMPXScale: 100.0,         // Default factor for MPX 
+  MeterRDSScale: 650.0,         // Default factor for RDS
 
   // 4. FFT / Spectrum Settings
-  fftLibrary: "fft-js",         // "fft-js" or "pffft.wasm" (faster)
   fftSize: 512,                 // FFT Window size (resolution)
   
   // 5. Spectrum Visuals
@@ -178,34 +176,35 @@ function normalizePluginConfig(json) {
     json.SpectrumInputCalibration = json.CurveInputCalibration;
     delete json.CurveInputCalibration;
   }
-
+  
   // Cleanup: Remove unused keys
   if (typeof json.SpectrumAverageLevel !== "undefined") delete json.SpectrumAverageLevel;
   if (typeof json.DevLimitKHz !== "undefined") delete json.DevLimitKHz;
   if (typeof json.DevRefKHz !== "undefined") delete json.DevRefKHz;
   if (typeof json.DevUncKHz !== "undefined") delete json.DevUncKHz;
   if (typeof json.DevScaleKHzPerAmp !== "undefined") delete json.DevScaleKHzPerAmp;
-  if (typeof json.MeterMPXScale !== "undefined") delete json.MeterMPXScale;
-
+  if (typeof json.MeterMonoScale !== "undefined") delete json.MeterMonoScale;
+  if (typeof json.MeterStereoScale !== "undefined") delete json.MeterStereoScale;
+  if (typeof json.fftLibrary !== "undefined") delete json.fftLibrary;
+  if (typeof json.MeterStereoCalibration !== "undefined") delete json.MeterStereoCalibration;
 
   // Apply Defaults for missing keys
   const result = {
+
     sampleRate: typeof json.sampleRate !== "undefined" ? json.sampleRate : defaultConfig.sampleRate,
     MPXmode: typeof json.MPXmode !== "undefined" ? json.MPXmode : defaultConfig.MPXmode,
     MPXStereoDecoder: typeof json.MPXStereoDecoder !== "undefined" ? json.MPXStereoDecoder : defaultConfig.MPXStereoDecoder,
     MPXInputCard: typeof json.MPXInputCard !== "undefined" ? json.MPXInputCard : defaultConfig.MPXInputCard,
-    
+
     MeterInputCalibration: typeof json.MeterInputCalibration !== "undefined" ? json.MeterInputCalibration : defaultConfig.MeterInputCalibration,
     MeterPilotCalibration: typeof json.MeterPilotCalibration !== "undefined" ? json.MeterPilotCalibration : defaultConfig.MeterPilotCalibration,
     MeterMPXCalibration: typeof json.MeterMPXCalibration !== "undefined" ? json.MeterMPXCalibration : defaultConfig.MeterMPXCalibration,
     MeterRDSCalibration: typeof json.MeterRDSCalibration !== "undefined" ? json.MeterRDSCalibration : defaultConfig.MeterRDSCalibration,
-    
-    MeterPilotScale: typeof json.MeterPilotScale !== "undefined" ? json.MeterPilotScale : defaultConfig.MeterPilotScale,
-    MeterRDSScale: typeof json.MeterRDSScale !== "undefined" ? json.MeterRDSScale : defaultConfig.MeterRDSScale,
-    MeterMonoScale: typeof json.MeterMonoScale !== "undefined" ? json.MeterMonoScale : defaultConfig.MeterMonoScale,
-    MeterStereoScale: typeof json.MeterStereoScale !== "undefined" ? json.MeterStereoScale : defaultConfig.MeterStereoScale,
 
-    fftLibrary: typeof json.fftLibrary !== "undefined" ? json.fftLibrary : defaultConfig.fftLibrary,
+    MeterPilotScale: typeof json.MeterPilotScale !== "undefined" ? json.MeterPilotScale : defaultConfig.MeterPilotScale,
+    MeterMPXScale: typeof json.MeterMPXScale !== "undefined" ? json.MeterMPXScale : defaultConfig.MeterMPXScale,
+    MeterRDSScale: typeof json.MeterRDSScale !== "undefined" ? json.MeterRDSScale : defaultConfig.MeterRDSScale,
+
     fftSize: typeof json.fftSize !== "undefined" ? json.fftSize : defaultConfig.fftSize,
     
     SpectrumInputCalibration: typeof json.SpectrumInputCalibration !== "undefined" ? json.SpectrumInputCalibration : defaultConfig.SpectrumInputCalibration,
@@ -288,7 +287,7 @@ function loadConfig(filePath) {
     } catch (err) {
       logError("[MPX CONFIG ERROR] Raw Content was:", fs.readFileSync(filePath, "utf8")); // Shows the content causing the error
       logWarn(
-        "[MPX] metricsmonitor.json invalid → rewriting with defaults:",
+        "[MPX] metricsmonitor.json invalid ? rewriting with defaults:",
         err.message
       );
       // Backup defaults
@@ -303,7 +302,7 @@ function loadConfig(filePath) {
 
   // File does not exist, create it
   logWarn(
-    "[MPX] metricsmonitor.json not found → creating new file with defaults."
+    "[MPX] metricsmonitor.json not found ? creating new file with defaults."
   );
   fs.writeFileSync(filePath, JSON.stringify(defaultConfig, null, 2), "utf8");
   return defaultConfig;
@@ -327,7 +326,6 @@ let CONFIG_SAMPLE_RATE;
 // Audio processing parameters
 let STEREO_BOOST;
 let AUDIO_METER_BOOST;
-let FFT_LIBRARY;
 let FFT_SIZE;
 let SPECTRUM_SEND_INTERVAL;
 
@@ -356,6 +354,7 @@ let METER_PILOT_SCALE;
 let METER_RDS_SCALE;
 let METER_MONO_SCALE;
 let METER_STEREO_SCALE;
+let METER_MPX_SCALE;
 
 // Curve adjustments
 let SPECTRUM_Y_OFFSET;
@@ -370,9 +369,6 @@ let PEAK_COLOR_FIXED;
 
 // Feature Toggles
 let isModule2Active;
-let isValidFFTConfig;
-let ENABLE_FFT;
-let ENABLE_GOERTZEL;
 let ENABLE_MPX;
 let ENABLE_ANALYZER;
 
@@ -391,29 +387,38 @@ function applyConfig(newConfig) {
     CONFIG_SAMPLE_RATE = ANALYZER_SAMPLE_RATE;
     STEREO_BOOST = Number(configPlugin.StereoBoost) || 1.0;
     AUDIO_METER_BOOST = Number(configPlugin.AudioMeterBoost) || 1.0;
-    FFT_LIBRARY = String(configPlugin.fftLibrary).trim();
     FFT_SIZE = Number(configPlugin.fftSize) || 4096;
     SPECTRUM_SEND_INTERVAL = Number(configPlugin.SpectrumSendInterval) || 30;
+    
     METER_INPUT_CALIBRATION_DB = Number(configPlugin.MeterInputCalibration) || 0;
     METER_GAIN_FACTOR = Math.pow(10, METER_INPUT_CALIBRATION_DB / 20.0);
+    
     SPECTRUM_INPUT_CALIBRATION_DB = Number(configPlugin.SpectrumInputCalibration) || 0;
     SPECTRUM_GAIN_FACTOR = Math.pow(10, SPECTRUM_INPUT_CALIBRATION_DB / 20.0);
+    
     SPECTRUM_ATTACK_LEVEL = Number(configPlugin.SpectrumAttackLevel) || 3;
     SPECTRUM_DECAY_LEVEL = Number(configPlugin.SpectrumDecayLevel) || 15;
+    
     MPX_MODE = String(configPlugin.MPXmode || "auto").toLowerCase();
     MPX_STEREO_DECODER = String(configPlugin.MPXStereoDecoder || "off").toLowerCase();
-    MPX_INPUT_CARD = String(configPlugin.MPXInputCard || "").replace(/^["'](.*)["']$/, "$1");
+    
+    MPX_INPUT_CARD = String(configPlugin.MPXInputCard || "").replace(/^["'](.*)["']$/, "$1").trim();
+    
     LOCK_VOLUME_SLIDER = configPlugin.LockVolumeSlider === true;
     ENABLE_SPECTRUM_ON_LOAD = configPlugin.EnableSpectrumOnLoad === true;
+    
     METER_PILOT_CALIBRATION = Number(configPlugin.MeterPilotCalibration) || 0.0;
     METER_MPX_CALIBRATION = Number(configPlugin.MeterMPXCalibration) || 0.0;
     METER_RDS_CALIBRATION = Number(configPlugin.MeterRDSCalibration) || 0.0;
-    METER_PILOT_SCALE = Number(configPlugin.MeterPilotScale) || 300.0;
-    METER_RDS_SCALE = Number(configPlugin.MeterRDSScale) || 24000.0;
-    METER_MONO_SCALE = Number(configPlugin.MeterMonoScale) || 55000.0;
-    METER_STEREO_SCALE = Number(configPlugin.MeterStereoScale) || 250000.0;
+    
+    // SCALES
+    METER_PILOT_SCALE = Number(configPlugin.MeterPilotScale) || 200.0;
+    METER_MPX_SCALE = Number(configPlugin.MeterMPXScale) || 100.0; 
+    METER_RDS_SCALE = Number(configPlugin.MeterRDSScale) || 650.0;   
+       
     SPECTRUM_Y_OFFSET = Number(configPlugin["Spectrum-Y-Offset"]) || -40;
     SPECTRUM_Y_DYNAMICS = Number(configPlugin["Spectrum-Y-Dynamics"]) || 2.0;
+    
     METER_COLOR_SAFE = JSON.stringify(configPlugin.MeterColorSafe || "rgb(0, 255, 0)");
     METER_COLOR_WARNING = JSON.stringify(configPlugin.MeterColorWarning || "rgb(255, 255, 0)");
     METER_COLOR_DANGER = JSON.stringify(configPlugin.MeterColorDanger || "rgb(255, 0, 0)");
@@ -422,10 +427,7 @@ function applyConfig(newConfig) {
     
     // Update feature toggles
     isModule2Active = sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
-    isValidFFTConfig = FFT_LIBRARY && FFT_LIBRARY.trim() !== "" && FFT_SIZE > 0;
-    ENABLE_FFT = isValidFFTConfig && isModule2Active;
-    ENABLE_GOERTZEL = sequenceContainsId(MODULE_SEQUENCE, 1) || sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
-    ENABLE_MPX = ENABLE_FFT || ENABLE_GOERTZEL;
+    ENABLE_MPX = isModule2Active; // Simplified logic as 3LAS is removed
     ENABLE_ANALYZER = ENABLE_MPX;
 
     logInfo("[MPX Config] New configuration has been applied to the server.");
@@ -486,86 +488,9 @@ function sequenceContainsId(seq, id) {
 }
 
 // ====================================================================================
-//  DEPENDENCY MANAGEMENT
-//  Ensures that necessary node modules are installed (e.g., fft-js).
-// ====================================================================================
-
-function ensureRequiredModules() {
-  const RequiredModules = [
-    "fft-js",
-    "bit-twiddle",
-    // If pffft.wasm is selected, we check it, otherwise we skip
-    FFT_LIBRARY === "pffft.wasm" ? "@echogarden/pffft-wasm" : null,
-  ].filter(Boolean);
-
-  RequiredModules.forEach((moduleName) => {
-    const modulePath = path.join(__dirname, "./../../node_modules", moduleName);
-    if (!fs.existsSync(modulePath)) {
-      logInfo(`[MPX] Module "${moduleName}" is missing. Installing via npm...`);
-      try {
-        execSync(`npm install ${moduleName}`, { stdio: "inherit" });
-        logInfo(`[MPX] Module "${moduleName}" installed successfully.`);
-      } catch (error) {
-        logError(`[MPX] Error installing module "${moduleName}":`, error);
-      }
-    }
-  });
-}
-
-// ====================================================================================
 //  SYSTEM PATCHING
 //  These functions modify other server files to ensure compatibility.
 // ====================================================================================
-
-/**
- * PATCH 3LAS SERVER
- * Modifies '3las.server.js' to respect the 'sampleRate' from config instead of
- * being hardcoded to 48000 Hz (unless on Windows where 48k is forced).
- */
-function patch3LAS() {
-  try {
-    const filePath = path.resolve(
-      __dirname,
-      "../../server/stream/3las.server.js"
-    );
-    let content = fs.readFileSync(filePath, "utf8");
-
-    // We look for the standard 3LAS initialization line
-    const oldBlockRegex = /const audioChannels[\s\S]*?48000\);/;
-
-    const newBlock = `
-const audioChannels = serverConfig.audio.audioChannels || 2;
-
-// Default fallback
-let sampleRate = Number(serverConfig.audio.sampleRate) || 48000;
-
-// On Windows we still force 48000 Hz (3LAS limitation / compatibility)
-if (process.platform === "win32") {
-  sampleRate = 48000;
-  logInfo("[Audio Stream] 3LAS on Windows detected → forcing sampleRate = 48000");
-} else {
-  logInfo("[Audio Stream] 3LAS using sampleRate from serverConfig.audio.sampleRate →", sampleRate);
-}
-
-const Server = new StreamServer(null, audioChannels, sampleRate);
-    `.trim();
-
-    if (oldBlockRegex.test(content)) {
-      content = content.replace(oldBlockRegex, newBlock);
-      fs.writeFileSync(filePath, content, "utf8");
-      logInfo(
-        "[MPX] 3LAS sampleRate block successfully patched. Please restart the webserver."
-      );
-    } else {
-      // It might be already patched or different version
-      logInfo(
-        "[MPX] 3LAS old sampleRate block not found – no changes applied (possibly already patched)."
-      );
-    }
-  } catch (err) {
-    logError("[MPX] Failed to patch 3las.server.js:", err);
-  }
-}
 
 /**
  * PATCH HELPERS.JS
@@ -599,7 +524,7 @@ function patchHelpersForLocalhostBypass() {
 
     if (fnIndex === -1) {
       logWarn(
-        "[MPX] antispamProtection() not found in helpers.js – skipping localhost patch."
+        "[MPX] antispamProtection() not found in helpers.js  skipping localhost patch."
       );
       return;
     }
@@ -610,7 +535,7 @@ function patchHelpersForLocalhostBypass() {
 
     if (cmdIndex === -1) {
       logWarn(
-        "[MPX] 'const command = message.toString();' not found in antispamProtection() – skipping localhost patch."
+        "[MPX] 'const command = message.toString();' not found in antispamProtection()  skipping localhost patch."
       );
       return;
     }
@@ -688,9 +613,6 @@ function updateSettings() {
           `const MeterRDSCalibration = ${METER_RDS_CALIBRATION};    // Do not touch - this value is automatically updated via the config file\n` +
           `const MeterPilotScale = ${METER_PILOT_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
           `const MeterRDSScale = ${METER_RDS_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
-          `const MeterMonoScale = ${METER_MONO_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
-          `const MeterStereoScale = ${METER_STEREO_SCALE};    // Do not touch - this value is automatically updated via the config file\n` +
-          `const fftLibrary = "${FFT_LIBRARY}";    // Do not touch - this value is automatically updated via the config file\n` +
           `const fftSize = ${FFT_SIZE};    // Do not touch - this value is automatically updated via the config file\n` +
           `const SpectrumAttackLevel = ${SPECTRUM_ATTACK_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
           `const SpectrumDecayLevel = ${SPECTRUM_DECAY_LEVEL};    // Do not touch - this value is automatically updated via the config file\n` +
@@ -745,14 +667,11 @@ function updateSettings() {
         .replace(/^\s*const\s+MeterPilotScale\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+MeterMPXScale\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+MeterRDSScale\s*=.*;[^\n]*\n?/gm, "")
-        .replace(/^\s*const\s+MeterMonoScale\s*=.*;[^\n]*\n?/gm, "")
-        .replace(/^\s*const\s+MeterStereoScale\s*=.*;[^\n]*\n?/gm, "")
 
         // Other standard constants
         .replace(/^\s*const\s+MODULE_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+CANVAS_SEQUENCE\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+sampleRate\s*=.*;[^\n]*\n?/gm, "")
-        .replace(/^\s*const\s+fftLibrary\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+fftSize\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+SpectrumAverageLevel\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+SpectrumAttackLevel\s*=.*;[^\n]*\n?/gm, "")
@@ -972,7 +891,7 @@ function updateSettings() {
  */
 function copyAllClientFiles() {
   if (process.platform === "win32") {
-    logInfo("[MPX] Windows detected – skipping client file copy.");
+    logInfo("[MPX] Windows detected  skipping client file copy.");
     return;
   }
 
@@ -1182,72 +1101,16 @@ setupFileWatcher();
 
 if (!ENABLE_MPX) {
   logInfo(
-    `[MPX] MODULE_SEQUENCE = ${MODULE_SEQUENCE} → ` +
+    `[MPX] MODULE_SEQUENCE = ${MODULE_SEQUENCE} ? ` +
     "MPX capture & server-side MPX processing are disabled."
   );
 } else {
-  // If enabled, proceed to setup
-  ensureRequiredModules();
-
-  let FFT = null;
-  let pffftModule = null;
-  let pffftSetup = null;
-  let pffftInputPtr = null;
-  let pffftOutputPtr = null;
-  let pffftWorkPtr = null;
-  let pffftInputHeap = null;
-  let pffftOutputHeap = null;
-  let fftReady = false;
-
-  // Initialize FFT Library (WASM or JS fallback)
-  if (FFT_LIBRARY === "pffft.wasm") {
-    logInfo("[MPX] Initializing pffft.wasm library...");
-    (async () => {
-      try {
-        const PFFFT = await import("@echogarden/pffft-wasm");
-        pffftModule = await PFFFT.default();
-
-        pffftSetup = pffftModule._pffft_new_setup(FFT_SIZE, 0);
-        pffftInputPtr = pffftModule._pffft_aligned_malloc(FFT_SIZE * 4);
-        pffftOutputPtr = pffftModule._pffft_aligned_malloc(FFT_SIZE * 4);
-        pffftWorkPtr = pffftModule._pffft_aligned_malloc(FFT_SIZE * 4);
-
-        pffftInputHeap = new Float32Array(
-          pffftModule.HEAPF32.buffer,
-          pffftInputPtr,
-          FFT_SIZE
-        );
-        pffftOutputHeap = new Float32Array(
-          pffftModule.HEAPF32.buffer,
-          pffftOutputPtr,
-          FFT_SIZE
-        );
-
-        fftReady = true;
-        logInfo(
-          `[MPX] pffft.wasm initialized successfully for FFT size ${FFT_SIZE}`
-        );
-      } catch (e) {
-        logError("[MPX] Failed to initialize pffft.wasm:", e);
-        FFT = require("fft-js").fft;
-        fftReady = true;
-        logInfo("[MPX] Fallback to 'fft-js' active.");
-      }
-    })();
-  } else {
-    FFT = require("fft-js").fft;
-    fftReady = true;
-    logInfo("[MPX] Using standard 'fft-js' library.");
-  }
 
   // Apply patches
-  patch3LAS();
   patchHelpersForLocalhostBypass();
 
   let SAMPLE_RATE = CONFIG_SAMPLE_RATE;
-  const HOP_SIZE = FFT_SIZE / 2;
-  const MAX_LATENCY_BLOCKS = 2;
-
+  
   let SERVER_PORT = 8080;
   try {
     if (mainConfig?.webserver?.webserverPort) {
@@ -1258,27 +1121,26 @@ if (!ENABLE_MPX) {
     SERVER_PORT = 8080;
   }
 
-  logInfo(`[MPX] Using webserver port from config.json → ${SERVER_PORT}`);
+  logInfo(`[MPX] Using webserver port from config.json ? ${SERVER_PORT}`);
   logInfo(
-    `[MPX] sampleRate from metricsmonitor.json → ${CONFIG_SAMPLE_RATE} Hz`
+    `[MPX] sampleRate from metricsmonitor.json ? ${CONFIG_SAMPLE_RATE} Hz`
   );
-  logInfo(`[MPX] FFT Library → ${FFT_LIBRARY}`);
-  logInfo(`[MPX] FFT_SIZE from metricsmonitor.json → ${FFT_SIZE} points`);
-  logInfo(`[MPX] Analyzer enabled? → ${ENABLE_ANALYZER}`);
+  logInfo(`[MPX] FFT_SIZE from metricsmonitor.json ? ${FFT_SIZE} points`);
+  logInfo(`[MPX] Analyzer enabled? ? ${ENABLE_ANALYZER}`);
   logInfo(
-    `[MPX] SpectrumSendInterval from metricsmonitor.json → ${SPECTRUM_SEND_INTERVAL} ms`
+    `[MPX] SpectrumSendInterval from metricsmonitor.json ? ${SPECTRUM_SEND_INTERVAL} ms`
   );
-  logInfo(`[MPX] MPXmode from metricsmonitor.json → ${MPX_MODE}`);
+  logInfo(`[MPX] MPXmode from metricsmonitor.json ? ${MPX_MODE}`);
   logInfo(
-    `[MPX] MPXStereoDecoder from metricsmonitor.json → ${MPX_STEREO_DECODER}`
+    `[MPX] MPXStereoDecoder from metricsmonitor.json ? ${MPX_STEREO_DECODER}`
   );
   
   // Separate Calibration Logs
-  logInfo(`[MPX] MeterInputCalibration (Meters) → ${METER_INPUT_CALIBRATION_DB} dB (Factor: ${METER_GAIN_FACTOR.toFixed(3)})`);
-  logInfo(`[MPX] SpectrumInputCalibration (Spectrum) → ${SPECTRUM_INPUT_CALIBRATION_DB} dB (Factor: ${SPECTRUM_GAIN_FACTOR.toFixed(3)})`);
+  logInfo(`[MPX] MeterInputCalibration (Meters) ? ${METER_INPUT_CALIBRATION_DB} dB (Factor: ${METER_GAIN_FACTOR.toFixed(3)})`);
+  logInfo(`[MPX] SpectrumInputCalibration (Spectrum) ? ${SPECTRUM_INPUT_CALIBRATION_DB} dB (Factor: ${SPECTRUM_GAIN_FACTOR.toFixed(3)})`);
 
   if (MPX_INPUT_CARD !== "") {
-    logInfo(`[MPX] MPXInputCard from metricsmonitor.json → "${MPX_INPUT_CARD}"`);
+    logInfo(`[MPX] MPXInputCard from metricsmonitor.json ? "${MPX_INPUT_CARD}"`);
   }
 
   // ====================================================================================
@@ -1313,7 +1175,7 @@ if (!ENABLE_MPX) {
     binaryName = "MPXCapture";
   } else {
     logError(
-      `[MPX] Unsupported platform ${osPlatform}/${osArch} – MPXCapture will not be started.`
+      `[MPX] Unsupported platform ${osPlatform}/${osArch}  MPXCapture will not be started.`
     );
   }
 
@@ -1321,25 +1183,16 @@ if (!ENABLE_MPX) {
 
   if (!runtimeFolder || !binaryName) {
     logWarn(
-      "[MPX] No runtimeFolder/binaryName detected – MPXCapture disabled."
-    );
-  } else if (
-    osPlatform === "win32" &&
-    CONFIG_SAMPLE_RATE === 48000 &&
-    MPX_INPUT_CARD === ""
-  ) {
-    logWarn(
-      "[MPX] CONFIG_SAMPLE_RATE = 48000 on Windows (and no MPXInputCard) → using 3LAS, MPXCapture disabled."
+      "[MPX] No runtimeFolder/binaryName detected  MPXCapture disabled."
     );
   } else {
     MPX_EXE_PATH = path.join(__dirname, "bin", runtimeFolder, binaryName);
     MPX_EXE_PATH = MPX_EXE_PATH.replace(/^['\"]+|['\"]+$/g, "");
     logInfo(
-      `[MPX] Using MPXCapture binary for ${osPlatform}/${osArch} → ${runtimeFolder}/${binaryName}`
+      `[MPX] Using MPXCapture binary for ${osPlatform}/${osArch} ? ${runtimeFolder}/${binaryName}`
     );
   }
 
-  const BIN_STEP = 2;
   const MAX_WS_BACKLOG_BYTES = 256 * 1024;
 
   logInfo(
@@ -1350,6 +1203,7 @@ if (!ENABLE_MPX) {
   //  WEBSOCKET SERVER
   //  Handles data distribution to clients.
   // ====================================================================================
+  
   let dataPluginsWs = null;
   let reconnectTimer = null;
   let backpressureHits = 0;
@@ -1377,7 +1231,7 @@ if (!ENABLE_MPX) {
     });
 
     dataPluginsWs.on("close", () => {
-      logInfo("[MPX] /data_plugins WebSocket closed – retrying in 5 seconds.");
+      logInfo("[MPX] /data_plugins WebSocket closed  retrying in 5 seconds.");
       dataPluginsWs = null;
 
       if (!reconnectTimer) {
@@ -1398,487 +1252,154 @@ if (!ENABLE_MPX) {
   connectDataPluginsWs();
 
   // ====================================================================================
-  //  SIGNAL PROCESSING BUFFERS & VARIABLES
+  //  INPUT HANDLERS
   // ====================================================================================
-  let use3LasPcmFormat = false;
-  let sampleBuffer = [];
 
-  // HYBRID WINDOWING CONFIGURATION
-  // Precision for Pilot/RDS (Frequency stability)
-  // Fast for Audio (Broadband energy, low CPU usage)
-  const WIN_PRECISION = 4096; 
-  const WIN_FAST = 256;       
-
-  // Accumulator must be large enough for the biggest window
-  const GOERTZEL_WINDOW_SIZE = WIN_PRECISION; 
-  
-  let goertzelAccumulator = [];
-  
-  // Storage for pre-calculated Hann windows
-  let goertzelWindowPrecision = null;
-  let goertzelWindowFast = null;
-  
-  // Storage for Flat-Top window (for amplitude accuracy)
-  let goertzelWindowFlatTop = null;
-
-  let currentMaxPeak = 0;
   let currentPilotPeak = 0;
   let currentRdsPeak = 0;
+  let currentMaxPeak = 0;
   let currentNoiseFloor = 0;
-  
-  let currentMonoPeak = 0;
-  let currentStereoPeak = 0;
-  
-  // Auto-Pilot Frequency Search Variables
-  let detectedPilotFreq = 19000;
-  let pilotSearchCounter = 0;
-  const PILOT_SEARCH_INTERVAL = 5; // Search every 5 blocks
-
-  // DC Offset Tracking
-  let dcOffset = 0;
-
-  let fftBlock = null;
-  let windowHann = null;
-
-  if (ENABLE_ANALYZER) {
-    fftBlock = new Float32Array(FFT_SIZE);
-    windowHann = new Float32Array(FFT_SIZE);
-    for (let i = 0; i < FFT_SIZE; i++) {
-      windowHann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FFT_SIZE - 1)));
-    }
-  }
-
   let latestMpxFrame = null;
 
-  /**
-   * Initialize Windows (Precision, Fast, and Flat-Top)
-   */
-  function initGoertzelWindow() {
-    // 1. Precision Window (Hann)
-    goertzelWindowPrecision = new Float32Array(WIN_PRECISION);
-    for (let i = 0; i < WIN_PRECISION; i++) {
-      goertzelWindowPrecision[i] =
-        0.5 * (1 - Math.cos((2 * Math.PI * i) / (WIN_PRECISION - 1)));
-    }
+  const readline = require('readline');
 
-    // 2. Fast Window (Hann)
-    goertzelWindowFast = new Float32Array(WIN_FAST);
-    for (let i = 0; i < WIN_FAST; i++) {
-      goertzelWindowFast[i] =
-        0.5 * (1 - Math.cos((2 * Math.PI * i) / (WIN_FAST - 1)));
-    }
+  function setupJsonReader(childProcess) {
+      if (!childProcess || !childProcess.stdout) return;
 
-    // 3. Flat-Top Window (for precise amplitude measurement)
-    // Formula: w[n] = a0 - a1*cos(2pi*n/N) + a2*cos(4pi*n/N) - a3*cos(6pi*n/N)
-    // Using standard coefficients for a general-purpose flat-top window
-    goertzelWindowFlatTop = new Float32Array(WIN_PRECISION);
-    const a0 = 0.21557895;
-    const a1 = 0.41663158;
-    const a2 = 0.277263158;
-    const a3 = 0.083578947;
-    const a4 = 0.006947368;
-    for (let i = 0; i < WIN_PRECISION; i++) {
-        const n = i;
-        const N = WIN_PRECISION - 1;
-        goertzelWindowFlatTop[i] = a0
-            - a1 * Math.cos((2 * Math.PI * n) / N) 
-            + a2 * Math.cos((4 * Math.PI * n) / N) 
-            - a3 * Math.cos((6 * Math.PI * n) / N)
-            + a4 * Math.cos((8 * Math.PI * n) / N);
-    }
+      const rl = readline.createInterface({ 
+          input: childProcess.stdout, 
+          crlfDelay: Infinity 
+      });
 
-    logInfo(
-      `[MPX] Hybrid Analyzer initialized. Precision: ${WIN_PRECISION}, Fast: ${WIN_FAST}, Flat-Top Active`
-    );
+      rl.on('line', (line) => {
+          try {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('{')) return;
+              
+              const data = JSON.parse(trimmed);
+              
+              if (typeof data.p === 'number') currentPilotPeak = data.p;
+              if (typeof data.r === 'number') currentRdsPeak = data.r;
+              if (typeof data.m === 'number') currentMaxPeak = data.m;
+              
+              if (Array.isArray(data.s) && data.s.length > 0) {
+                  latestMpxFrame = data.s;
+              }
+
+          } catch (e) { }
+      });
   }
 
   // ====================================================================================
-  //  GOERTZEL ALGORITHM (OPTIMIZED)
-  //  Now accepts a specific window array to support hybrid processing.
-  // ====================================================================================
-  function calculateGoertzelWindowed(samples, targetFreq, sampleRate, windowArray) {
-    if (sampleRate < 1000) return 0;
-    
-    // Safety check: sample length must match window length
-    const len = samples.length;
-    if (len !== windowArray.length) return 0;
-
-    const omega = (2.0 * Math.PI * targetFreq) / sampleRate;
-    const cosine = Math.cos(omega);
-    const sine = Math.sin(omega);
-    const coeff = 2.0 * cosine;
-
-    let q0 = 0, q1 = 0, q2 = 0;
-    let windowSum = 0;
-
-    for (let i = 0; i < len; i++) {
-      const windowedSample = samples[i] * windowArray[i];
-      q0 = coeff * q1 - q2 + windowedSample;
-      q2 = q1;
-      q1 = q0;
-      windowSum += windowArray[i];
-    }
-
-    const real = q1 - q2 * cosine;
-    const imag = q2 * sine;
-    
-    // Proper normalization for Goertzel requires dividing by the sum of window coefficients, not just N.
-    const magnitude = Math.sqrt(real * real + imag * imag);
-    return (magnitude * 2.0) / windowSum;
-  }
-   
-  // ====================================================================================
-  //  AUDIO INPUT INITIALIZATION
-  //  Selects between 3LAS stream or MPXCapture binary.
+  //  INPUT STARTUP (LOGIC FIXED FOR OFF/ON/AUTO)
   // ====================================================================================
   let rec = null;
-  const explicitCard =
-    MPX_INPUT_CARD !== "" && MPX_INPUT_CARD.toLowerCase() !== "off";
-
-  const USE_3LAS = !explicitCard && CONFIG_SAMPLE_RATE === 48000;
-
-  if (USE_3LAS) {
-    try {
-      const audioStream = require("./../../server/stream/3las.server");
-
-      if (!audioStream || !audioStream.waitUntilReady) {
-        logWarn(
-          "[MPX] 3LAS server not available – MPX spectrum capture disabled."
-        );
-      } else {
-        audioStream.waitUntilReady
-          .then(() => {
-            const s = audioStream.Server;
-            if (!s || !s.StdIn) {
-              logError(
-                "[MPX] 3LAS Server has no StdIn stream – MPX spectrum capture disabled."
-              );
-              return;
-            }
-
-            if (typeof s.SampleRate === "number" && s.SampleRate > 0) {
-              SAMPLE_RATE = s.SampleRate;
-            } else {
-              SAMPLE_RATE = CONFIG_SAMPLE_RATE || 48000;
-              logWarn(
-                `[MPX] 3LAS sampleRate unknown – assuming ${SAMPLE_RATE} Hz for MPX spectrum.`
-              );
-            }
-
-            use3LasPcmFormat = true;
-
-            logInfo(
-              `[MPX] Subscribing to 3LAS StdIn PCM stream (${osPlatform}) @ ${SAMPLE_RATE} Hz`
-            );
-
-            s.StdIn.on("data", (buffer) => {
-              handlePcmChunk(buffer);
-            });
-          })
-          .catch((err) => {
-            logError("[MPX] Error while waiting for 3LAS audio stream:", err);
-          });
+  let targetDevice = "";
+  
+  if (MPX_MODE === "off") {
+      logInfo("[MPX] Mode is 'off' -> MPX Capture Disabled.");
+  } 
+  else {
+      // Determine Input Device
+      if (MPX_INPUT_CARD && MPX_INPUT_CARD !== "") {
+          targetDevice = MPX_INPUT_CARD;
+          logInfo(`[MPX] Using device from plugin config: "${targetDevice}"`);
+      } 
+      else {
+          // If no specific MPXInputCard is set, ALWAYS fallback to main config
+          if (mainConfig && mainConfig.audio && mainConfig.audio.audioDevice && mainConfig.audio.audioDevice !== "") {
+              targetDevice = mainConfig.audio.audioDevice;
+              logInfo(`[MPX] MPXInputCard empty -> Fallback to main config audioDevice: "${targetDevice}"`);
+          } else {
+              targetDevice = "Default";
+              logWarn("[MPX] MPXInputCard empty AND main config empty -> Using 'Default'.");
+          }
       }
-    } catch (e) {
-      logError(
-        "[MPX] Failed to require 3las.server – MPX spectrum capture disabled:",
-        e
-      );
-    }
-  } else if (!MPX_EXE_PATH) {
-    logWarn(
-      "[MPX] MPXCapture path not resolved or platform unsupported – not starting MPXCapture."
-    );
-  } else if (!fs.existsSync(MPX_EXE_PATH)) {
-    logError("[MPX] MPXCapture binary not found at path:", MPX_EXE_PATH);
-  } else {
-    use3LasPcmFormat = false;
+  }
+
+  // --- STARTUP ---
+
+  if (MPX_MODE !== "off" && MPX_EXE_PATH && fs.existsSync(MPX_EXE_PATH)) {
 
     if (osPlatform !== "win32") {
-      try {
-        fs.chmodSync(MPX_EXE_PATH, 0o755);
-      } catch (err) {
-        logWarn(
-          `[MPX] Failed to set execution permissions for ${MPX_EXE_PATH}:`,
-          err
+        try { fs.chmodSync(MPX_EXE_PATH, 0o755); } catch (e) {}
+    }
+
+    logInfo(`[MPX] Starting MPXCapture`);
+
+    /* =====================================================
+       WINDOWS: MPXCapture opens Audio itself
+       ===================================================== */
+    if (osPlatform === "win32") {
+
+        logInfo(
+            `[MPX] Direct audio mode (Windows) | Rate=${SAMPLE_RATE}, Dev="${targetDevice}", FFT=${FFT_SIZE}`
         );
-      }
-    }
 
-    const args = [String(SAMPLE_RATE)];
+        const absConfigPath = path.resolve(configFilePath);
+        const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
 
-    if (explicitCard) {
-      logInfo(
-        `[MPX] Starting MPXCapture with specific device: "${MPX_INPUT_CARD}"`
-      );
-      args.push(MPX_INPUT_CARD);
+        logInfo(`[MPX] Spawning C# Binary with Config: "${absConfigPath}"`);
+
+        rec = spawn(
+            MPX_EXE_PATH,
+            [
+                String(SAMPLE_RATE),
+                deviceArg,
+                String(FFT_SIZE),
+                absConfigPath
+            ],
+            {
+
+                cwd: path.resolve(__dirname, "../../"), 
+                env: {
+                    ...process.env,
+                    PYTHONUNBUFFERED: "1"
+                }
+            }
+        );
+
+    /* =====================================================
+       LINUX: arecord -> stdin -> MPXCapture
+       ===================================================== */
     } else {
-      logInfo(
-        `[MPX] Starting MPXCapture (${osPlatform}/${osArch}) with SAMPLE_RATE = ${SAMPLE_RATE} Hz (Default Device)`
-      );
+        const escapedConfigPath = configFilePath.replace(/"/g, '\\"');
+        const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
+
+        logInfo(
+        `[MPX] arecord -> MPXCapture | Rate=${SAMPLE_RATE}, Dev="${deviceArg}", Config="${configFilePath}"`
+        );
+
+        rec = spawn("bash", ["-c", `
+    arecord -F 25000 -D "${deviceArg}" \
+    -c2 -r${SAMPLE_RATE} -f FLOAT_LE \
+    -t raw -q \
+    | "${MPX_EXE_PATH}" ${SAMPLE_RATE} "Default" ${FFT_SIZE} "${escapedConfigPath}"
+    `], {
+        stdio: ["ignore", "pipe", "pipe"]
+        });
     }
 
-    rec = spawn(MPX_EXE_PATH, args);
-
+    /* =====================================================
+       STDERR -> Log
+       ===================================================== */
     rec.stderr.on("data", (d) => {
-      const text = d.toString().trim();
-      if (text.length > 0) {
-        logInfo("[MPX-EXE]", text);
-      }
+        const msg = d.toString().trim();
+        if (msg.length) logInfo("[MPXCapture]", msg);
     });
 
-    rec.stdout.on("data", handlePcmChunk);
+    /* =====================================================
+       JSON Reader (stdout)
+       ===================================================== */
+    setupJsonReader(rec);
 
-    rec.on("close", (code, signal) => {
-      logInfo(
-        "[MPX] MPXCapture exited with code:",
-        code,
-        "signal:",
-        signal || "none"
-      );
-      if (explicitCard && code !== 0) {
-        logWarn(
-          `[MPX] MPXCapture exited prematurely. Verify if device "${MPX_INPUT_CARD}" exists and is not in use.`
-        );
-      }
+    rec.on("close", (code) => {
+        logInfo("[MPX] MPXCapture exited with code:", code);
     });
-  }
-
-  // ====================================================================================
-  //  PCM Sampling & Signal Processing (Optimized Multi-Band Scan)
-  // ====================================================================================
-
-  // Buffer for history
-  let rdsHistoryBuffer = [];
-  const RDS_HISTORY_SIZE = 50; 
-
-  // --- PERFORMANCE OPTIMIZATION: CACHES ---
-  let rdsCoeffCache = null;
-  let monoCoeffCache = null;
-  let stereoCoeffCache = null;
-  let cachedSampleRate = 0;
-  
-  // Scan Parameters
-  const RDS_START = 55000, RDS_END = 59000, RDS_STEP = 50;    
-  const MONO_START = 100, MONO_END = 15000, MONO_STEP = 1000;  
-  const STEREO_START = 23000, STEREO_END = 53000, STEREO_STEP = 2000; 
-
-  // Helper to build a coefficient cache
-  function buildCoeffCache(startFreq, endFreq, stepFreq, rate) {
-      let cache = [];
-      for (let f = startFreq; f <= endFreq; f += stepFreq) {
-          const omega = (2.0 * Math.PI * f) / rate;
-          cache.push({
-              coeff: 2.0 * Math.cos(omega),
-              cosine: Math.cos(omega), 
-              sine: Math.sin(omega)
-          });
-      }
-      return cache;
-  }
-
-  // Helper for fast energy calculation using a cache
-  function calculateBandEnergy(buffer, cache, window) {
-      let energySum = 0;
-      const len = buffer.length;
-      let windowSum = 0;
-      for (let i=0; i<window.length; i++) windowSum += window[i];
-      
-      for (let k = 0; k < cache.length; k++) {
-          const item = cache[k];
-          const coeff = item.coeff;
-          let q0 = 0, q1 = 0, q2 = 0;
-          for (let i = 0; i < len; i++) {
-              q0 = coeff * q1 - q2 + (buffer[i] * window[i]);
-              q2 = q1;
-              q1 = q0;
-          }
-          const real = q1 - q2 * item.cosine; 
-          const imag = q2 * item.sine;       
-          const mag_sq = real * real + imag * imag;
-          energySum += mag_sq * (4.0 / (windowSum * windowSum));
-      }
-      return energySum / cache.length;
-  }
-
-  /**
-   * Helper: Oversampling / True Peak Estimation
-   * Estimates the true peak between two samples. For efficiency,
-   * this uses a simple heuristic: if samples are high, assume the peak is higher.
-   */
-  function estimateTruePeak(s1, s2) {
-      const a = Math.abs(s1);
-      const b = Math.abs(s2);
-      // A full sinc interpolation is too CPU intensive here.
-      // This approximation adds headroom for potential inter-sample peaks.
-      if (a > 0.5 && b > 0.5) {
-          return Math.max(a, b) * 1.05; // Add 5% headroom
-      }
-      return Math.max(a, b);
-  }
-
-function handlePcmChunk(chunk) {
-    if (!chunk.length) return;
-    
-    const processingRate = (SAMPLE_RATE && SAMPLE_RATE > 0) ? SAMPLE_RATE : 48000;
-    
-    if (ENABLE_GOERTZEL && !goertzelWindowPrecision) initGoertzelWindow();
-
-    if (!rdsCoeffCache || cachedSampleRate !== processingRate) {
-        cachedSampleRate = processingRate;
-        rdsCoeffCache = buildCoeffCache(RDS_START, RDS_END, RDS_STEP, processingRate);
-        monoCoeffCache = buildCoeffCache(MONO_START, MONO_END, MONO_STEP, processingRate);
-        stereoCoeffCache = buildCoeffCache(STEREO_START, STEREO_END, STEREO_STEP, processingRate);
-        logInfo(`[MPX] Optimized Scan Caches rebuilt: Mono=${monoCoeffCache.length}, Stereo=${stereoCoeffCache.length}, RDS=${rdsCoeffCache.length} steps.`);
-    }
-
-    let meterBuffer = []; 
-
-    if (use3LasPcmFormat) {
-        const intData = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
-        for (let i = 0; i < intData.length; i += 2) {
-            let v = ((intData[i]/32768.0) + ((intData[i+1]??intData[i])/32768.0))*0.5;
-            
-            // --- DC Offset Removal (High Pass Filter) ---
-            dcOffset = (dcOffset * 0.995) + (v * 0.005);
-            v = v - dcOffset;
-
-            if (ENABLE_FFT) sampleBuffer.push(v * SPECTRUM_GAIN_FACTOR);
-            if (ENABLE_GOERTZEL) meterBuffer.push(v * METER_GAIN_FACTOR);
-        }
-    } else {
-        const floatData = new Float32Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 4);
-        for (let i = 0; i < floatData.length; i += 2) {
-            let v = (floatData[i] + (floatData[i+1]??floatData[i]))*0.5;
-
-            // --- DC Offset Removal (High Pass Filter) ---
-            dcOffset = (dcOffset * 0.995) + (v * 0.005);
-            v = v - dcOffset;
-
-            if (ENABLE_FFT) sampleBuffer.push(v * SPECTRUM_GAIN_FACTOR);
-            if (ENABLE_GOERTZEL) meterBuffer.push(v * METER_GAIN_FACTOR);
-        }
-    }
-
-    if (ENABLE_GOERTZEL) {
-        let chunkMax = 0;
-        
-        // --- True Peak Detection ---
-        for (let i = 0; i < meterBuffer.length - 1; i++) {
-            const v1 = meterBuffer[i];
-            const v2 = meterBuffer[i+1];
-            
-            // Estimate inter-sample peak
-            const truePeak = estimateTruePeak(v1, v2);
-            if (truePeak > chunkMax) chunkMax = truePeak;
-
-            if (goertzelAccumulator.length < WIN_PRECISION) {
-                goertzelAccumulator.push(v1);
-            }
-        }
-        
-        if (chunkMax >= currentMaxPeak) currentMaxPeak = chunkMax;
-        else currentMaxPeak = currentMaxPeak * 0.95 + chunkMax * 0.05;
-
-        if (goertzelAccumulator.length >= WIN_PRECISION) {
-            const workBuffer = goertzelAccumulator; 
-            
-            // --- Automatic Pilot Frequency Search ---
-            pilotSearchCounter++;
-            if (pilotSearchCounter >= PILOT_SEARCH_INTERVAL) {
-                pilotSearchCounter = 0;
-                let maxPilotAmp = 0;
-                let bestFreq = 19000;
-                for (let f = 18950; f <= 19050; f += 5) {
-                    const amp = calculateGoertzelWindowed(workBuffer, f, processingRate, goertzelWindowPrecision);
-                    if (amp > maxPilotAmp) {
-                        maxPilotAmp = amp;
-                        bestFreq = f;
-                    }
-                }
-                if (maxPilotAmp > 0.005) { // Only update if signal is strong enough
-                    detectedPilotFreq = bestFreq;
-                } else {
-                     detectedPilotFreq = 19000; // Reset to default if no pilot found
-                }
-            }
-
-            const noiseFrequencies = [17000, 21000, 54000, 60000, 70000, 80000];
-            let totalNoisePower = 0;
-            for (const freq of noiseFrequencies) {
-                const amp = calculateGoertzelWindowed(workBuffer, freq, processingRate, goertzelWindowPrecision);
-                totalNoisePower += (amp * amp);
-            }
-            const averageNoisePower = totalNoisePower / noiseFrequencies.length;
-            const noiseAmp = Math.sqrt(averageNoisePower);
-            
-            currentNoiseFloor = noiseAmp;
-
-            // --- Use Flat-Top Window for Pilot & RDS amplitude ---
-            let pilotAmp = calculateGoertzelWindowed(workBuffer, detectedPilotFreq, processingRate, goertzelWindowFlatTop);
-            
-            let isPilotPresent = (pilotAmp > noiseAmp * 1.8);
-            let pilot = isPilotPresent ? pilotAmp : 0;
-            
-            let avgRdsPower = calculateBandEnergy(workBuffer, rdsCoeffCache, goertzelWindowFlatTop);
-            currentRdsPeak = Math.sqrt(avgRdsPower);
-
-            // Use Hann window for energy calculation of Mono and Stereo bands
-            let avgMonoPower = calculateBandEnergy(workBuffer, monoCoeffCache, goertzelWindowPrecision);
-            let cleanMonoPower = Math.max(0, avgMonoPower - (averageNoisePower * 0.2));
-            let monoRms = Math.sqrt(cleanMonoPower);
-
-            let avgStereoPower = calculateBandEnergy(workBuffer, stereoCoeffCache, goertzelWindowPrecision);
-            let cleanStereoPower = Math.max(0, avgStereoPower - averageNoisePower);
-            let stereoRms = isPilotPresent ? Math.sqrt(cleanStereoPower) : 0;
-
-            currentPilotPeak = currentPilotPeak * 0.85 + pilot * 0.15;
-            currentMonoPeak = currentMonoPeak * 0.7 + monoRms * 0.3;
-            currentStereoPeak = currentStereoPeak * 0.7 + stereoRms * 0.3;
-
-            goertzelAccumulator = [];
-        }
-    }
-
-    // --- FFT ---
-    if (ENABLE_FFT && fftReady && sampleBuffer.length >= FFT_SIZE) {
-        if (sampleBuffer.length > MAX_LATENCY_BLOCKS * FFT_SIZE) sampleBuffer.splice(0, sampleBuffer.length - MAX_LATENCY_BLOCKS * FFT_SIZE);
-        const start = sampleBuffer.length - FFT_SIZE;
-        for(let i=0; i<FFT_SIZE; i++) fftBlock[i] = sampleBuffer[start+i] * windowHann[i];
-        
-        let mags;
-        if (pffftModule) {
-            pffftInputHeap.set(fftBlock);
-            pffftModule._pffft_transform_ordered(pffftSetup, pffftInputPtr, pffftOutputPtr, pffftWorkPtr, 0);
-            mags = new Float32Array(FFT_SIZE / 2);
-            for(let i=0; i<FFT_SIZE/2; i++) {
-                const re = pffftOutputHeap[2*i], im = pffftOutputHeap[2*i+1];
-                mags[i] = (Math.sqrt(re*re + im*im)/(FFT_SIZE/2)) * (i>0?10:1);
-            }
-        } else if (typeof FFT === 'function') {
-            try {
-                const phasors = FFT(fftBlock);
-                mags = new Float32Array(FFT_SIZE / 2);
-                for(let i=0; i<FFT_SIZE/2; i++) mags[i] = (Math.sqrt(phasors[i][0]**2 + phasors[i][1]**2)/(FFT_SIZE/2)) * (i>0?10:1);
-            } catch(e) {}
-        }
-        
-        if (mags) {
-            const mpx = [];
-            for (let i = 0; i < mags.length; i+=2) {
-                if ((i*processingRate/FFT_SIZE) > 100000) break;
-                mpx.push(Math.round(mags[i]*100000)/100000);
-            }
-            if (mpx.length) latestMpxFrame = mpx;
-        }
-        
-        const keep = Math.max(0, sampleBuffer.length - (FFT_SIZE / 2));
-        if (keep > 0) sampleBuffer.splice(0, keep); else sampleBuffer.length = 0;
-    }
 }
 
 // ====================================================================================
-//  MAIN BROADCAST LOOP (V2.4 - Summen-Modus / Config-gesteuert)
+//  MAIN BROADCAST LOOP (V2.5 - Dynamic Scaling)
 // ====================================================================================
 
 if (typeof global.mpxPeakState === 'undefined') {
@@ -1887,12 +1408,13 @@ if (typeof global.mpxPeakState === 'undefined') {
   global.rdsStableValue = 0;
   global.mpxDisplayPeak = 0;
   global.logThrottle = 0;
-  global.monoRawSmoother = 0;
-  global.stereoRawSmoother = 0;
 }
 
 setInterval(() => {
+    // 1. Check WebSocket connection
     if (!dataPluginsWs || dataPluginsWs.readyState !== WebSocket.OPEN) return;
+    
+    // 2. Check Backpressure
     if (dataPluginsWs.bufferedAmount > MAX_WS_BACKLOG_BYTES) {
         if (++backpressureHits >= MAX_BACKPRESSURE_HITS) {
             try { dataPluginsWs.terminate(); } catch {}
@@ -1902,68 +1424,59 @@ setInterval(() => {
     }
     backpressureHits = 0;
 
-    let rP = 0, rR = 0, rM = 0, rN = 1e-6, rMono = 0, rStereo = 0;
-    if (ENABLE_GOERTZEL) {
-        rP = currentPilotPeak;
-        rR = currentRdsPeak;
-        rM = currentMaxPeak; 
-        rN = currentNoiseFloor || 1e-6;
-        rMono = currentMonoPeak;
-        rStereo = currentStereoPeak;
-    }
+    // -----------------------------------------------------------------------
+    // PREPARE DATA
+    // -----------------------------------------------------------------------
+    // We trust that the C-Script (MPXCapture) has already applied the SCALING
+    // based on the config file. We receive values in kHz.
+    
+    const valP = currentPilotPeak; // Already scaled in kHz (from C)
+    const valR = currentRdsPeak;   // Already scaled in kHz (from C)
+    const valM = currentMaxPeak;   // Already scaled in kHz (from C)
+    const valN = (currentNoiseFloor || 1e-6);
 
-    // --- 1. PILOT ---
-    const cleanPilot = rP > 1e-5 ? rP : 0;
-    global.pilotFastAvg = (global.pilotFastAvg * 0.9) + (cleanPilot * 0.1);
-    const rawPilotKHz = global.pilotFastAvg * METER_PILOT_SCALE;
-    let out_pilot = (rawPilotKHz > 0.5) ? rawPilotKHz + METER_PILOT_CALIBRATION : rawPilotKHz;
+    // -----------------------------------------------------------------------
+    // 1. PILOT
+    // -----------------------------------------------------------------------
+    // Smooth the input from C
+    global.pilotFastAvg = (global.pilotFastAvg * 0.9) + (valP * 0.1);
+    
+    // Apply Calibration Offset (Calibration is +/- kHz)
+    let out_pilot = global.pilotFastAvg;
+    if (out_pilot > 0.5) {
+        out_pilot += METER_PILOT_CALIBRATION;
+    }
     if (out_pilot < 0) out_pilot = 0;
 
-    // --- 2. RDS ---
-    const targetRdsKHz = (rR * METER_RDS_SCALE) + METER_RDS_CALIBRATION;
-    const smoothingFactor = 0.05;
-    global.rdsStableValue = (global.rdsStableValue * (1 - smoothingFactor)) + (targetRdsKHz * smoothingFactor);
-    let out_rds = global.rdsStableValue > 0 ? global.rdsStableValue : 0;
-    if (out_rds > 15.0) out_rds = 15.0;
-
-    // --- 3. MONO & STEREO ---
-    const monoRawAttack = (rMono > global.monoRawSmoother) ? 0.2 : 0.05;
-    global.monoRawSmoother = (global.monoRawSmoother * (1 - monoRawAttack)) + (rMono * monoRawAttack);
+    // -----------------------------------------------------------------------
+    // 2. RDS
+    // -----------------------------------------------------------------------
+    // Smooth the input from C
+    const smoothingFactor = 0.1;
+    global.rdsStableValue = (global.rdsStableValue * (1 - smoothingFactor)) + (valR * smoothingFactor);
     
-    const stereoRawAttack = (rStereo > global.stereoRawSmoother) ? 0.2 : 0.05;
-    global.stereoRawSmoother = (global.stereoRawSmoother * (1 - stereoRawAttack)) + (rStereo * stereoRawAttack);
-
-    // Hier greifen jetzt Ihre Config-Werte voll durch:
-    const out_mono_dev = global.monoRawSmoother * METER_MONO_SCALE;
-    const out_stereo_dev = global.stereoRawSmoother * METER_STEREO_SCALE;
-
-    // === MAIN MPX METER (SUM CALCULATION) ===
-    // Jetzt addieren wir die Komponenten. 
-    // Das bedeutet: Wenn Sie MonoScale erhöhen, steigt auch Total MPX.
-    let calcMpx = out_mono_dev + out_stereo_dev + out_pilot + out_rds;
+    // Apply Calibration Offset
+    let out_rds = global.rdsStableValue;
+    if (out_rds > 0.1) {
+        out_rds += METER_RDS_CALIBRATION;
+    }
     
-    // Optional: Fallback, falls die Summe mal kleiner ist als der echte Peak (selten)
-    // Wir nehmen zur Sicherheit den echten Peak (rM * 107) als Untergrenze, falls die Scales zu niedrig eingestellt sind.
-    // Aber wir lassen zu, dass calcMpx höher wird, wenn Sie die Scales hochdrehen.
-    const truePeakMpx = rM * 107.14; 
-    if (calcMpx < truePeakMpx) {
-        // Soft-Fallback: Wenn Config-Werte zu niedrig sind, nimm True Peak
-        // calcMpx = truePeakMpx; // (Auskommentiert lassen, wenn Sie volle manuelle Kontrolle wollen)
-    }
+    // Limits
+    if (out_rds < 0) out_rds = 0;
 
-    if (calcMpx > 5.0) {
-        calcMpx += METER_MPX_CALIBRATION;
-    }
+    // -----------------------------------------------------------------------
+    // 3. MPX
+    // -----------------------------------------------------------------------
+    let rawMpxKHz = valM; 
 
-    // Gate
-    if (out_pilot < 4.0 && out_rds < 1.0) {
-        calcMpx = 0;
-    }
+    // Apply Calibration Offset
+    // Only apply if signal is present (> 1.0 kHz) to avoid DC offset issues
+        rawMpxKHz += METER_MPX_CALIBRATION;
 
-    // Display Smoothing
-    let target = calcMpx;
+    // Display Smoothing (Visual Only)
+    let target = rawMpxKHz;
     const displayAttack = 0.3;
-    const displayDecay = 0.02;
+    const displayDecay = 0.1;
 
     if (target > global.mpxDisplayPeak) {
         global.mpxDisplayPeak = (global.mpxDisplayPeak * (1 - displayAttack)) + (target * displayAttack);
@@ -1973,45 +1486,42 @@ setInterval(() => {
     
     let out_mpx = global.mpxDisplayPeak;
     
-    if (out_mpx > 150.0) out_mpx = 150.0;
+    // Safety Clamps
     if (out_mpx < 0) out_mpx = 0;
 
-    // --- LOGGING ---
+    // -----------------------------------------------------------------------
+    // LOGGING (Restored Format)
+    // -----------------------------------------------------------------------
     if (ENABLE_EXTENDED_LOGGING) {
         if (++global.logThrottle >= 33) {
              global.logThrottle = 0;
-             // Jetzt sehen Sie im Log: Summe der Teile = Total
-             logInfo(`[MPX] Mono:${out_mono_dev.toFixed(1)}k | Pilot:${out_pilot.toFixed(1)}k | Stereo:${out_stereo_dev.toFixed(1)}k | RDS:${out_rds.toFixed(1)}k -> TOTAL(Sum):${out_mpx.toFixed(1)}k`);
+             // Logging Format: RAW (from C, Scaled) -> OUT (Smoothed + Calibrated)
+             logInfo(`[MPX] RAW [P:${valP.toFixed(4)} M:${valM.toFixed(4)} R:${valR.toFixed(4)}] -> OUT [Pilot:${out_pilot.toFixed(1)}k MPX:${out_mpx.toFixed(1)}k RDS:${out_rds.toFixed(1)}k]`);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // SEND TO CLIENT
+    // -----------------------------------------------------------------------
+    let finalSpectrum = [];
+    if (latestMpxFrame && latestMpxFrame.length > 0) {
+        finalSpectrum = latestMpxFrame;
     }
 
     const payload = JSON.stringify({
       type: "MPX", 
-      value: latestMpxFrame || [], 
+      value: finalSpectrum,
       peak: out_mpx, 
       pilotKHz: out_pilot, 
       rdsKHz: out_rds,
-      pilot: rP, 
-      rds: rR, 
-      noise: rN, 
-      snr: (rN > 1e-6) ? (rP / rN) : 0
+      pilot: valP, 
+      rds: valR, 
+      noise: valN, 
+      snr: (valN > 1e-6) ? (valP / valN) : 0
     });
 
     dataPluginsWs.send(payload, () => {});
 
 }, SPECTRUM_SEND_INTERVAL);
   
-  // Cleanup Handlers
-  if (FFT_LIBRARY === "pffft.wasm") {
-    process.on("exit", () => {
-      if (pffftModule && pffftSetup) {
-        try {
-          pffftModule._pffft_destroy_setup(pffftSetup);
-          pffftModule._pffft_aligned_free(pffftInputPtr);
-          pffftModule._pffft_aligned_free(pffftOutputPtr);
-          pffftModule._pffft_aligned_free(pffftWorkPtr);
-        } catch (e) {}
-      }
-    });
-  }
 }

@@ -1,7 +1,7 @@
 // Plugin configuration, this is used in the administration when plugins are loaded
 var pluginConfig = {
     name: 'Metrics Monitor',
-    version: '1.6',
+    version: '2.0',
     author: 'Highpoint',
     frontEndPath: 'MetricsMonitor/metricsmonitor.js'
 }
