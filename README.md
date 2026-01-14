@@ -116,10 +116,9 @@ If the Headless TEF has a line-level audio output, the MPX output can be permane
 Anyone wishing to perform stereo decoding using MPX Tool or similar should use the settings "MPXmode": "on" and "MPXStereoDecoder": "on". This will result in permanent MPX output and stereo signaling on the display.
 
 ## Hardware Configuration Recommendations
-
-<img width="320" height="240" alt="Folie1" src="https://github.com/user-attachments/assets/d06ae4ea-cd80-4bb4-93a6-3673c0fe68ed" />
-<img width="320" height="240" alt="Folie2" src="https://github.com/user-attachments/assets/380bbe11-e49f-4b22-9036-4df96ef06065" />
-<img width="320" height="240" alt="Folie3" src="https://github.com/user-attachments/assets/4a421fd9-524a-483d-af32-9bbb1f7fa940" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/a5137a30-5acb-4802-857f-6a624f815db7" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/429c8fb2-43ee-4eb1-ae98-06eae1dd0b6f" />
+<img width="320" height="240" src="https://github.com/user-attachments/assets/3cdebe6a-6eb6-4f7f-b7ad-364853d55f26" />
 
 You can test the plugin in Option 1 here: http://highpoint2000.selfhost.de:6080
 
