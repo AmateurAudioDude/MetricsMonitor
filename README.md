@@ -8,15 +8,15 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 ## v2.0
 
-- Fixed issues with relative image paths
 - Using our own program library for spectrum analysis and display calculation -> more resource-efficient and higher measurement accuracy
 - New scale variables for PILOT, MPX and RDS (see calibration)
+- Automatic detection of the MPX channel
+- Fixed issues with relative image paths
 
 ## Important note for this version: 
 
-- To activate the MPX or spectrum display, the MPX mode must now be set to "on" or "auto" !!!
-- To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
-  https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
+To use the MPX switching option with an ESP32 TEF receiver, this firmware version must be installed:
+https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF6686_ESP32_Dev_Beta_%20v2.20.5.zip
 
 ## Installation notes
 
