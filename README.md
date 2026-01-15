@@ -122,8 +122,10 @@ Anyone wishing to perform stereo decoding using MPX Tool or similar should use t
 <img width="320" height="240" src="https://github.com/user-attachments/assets/3cdebe6a-6eb6-4f7f-b7ad-364853d55f26" />
 
 You can test the plugin here:
-Option 1 - http://highpoint2000.selfhost.de:6080 
-Option 2 - http://highpoint2000.selfhost.de:8080 
+
+Option 1 - http://highpoint2000.selfhost.de:6080
+
+Option 3 - http://highpoint2000.selfhost.de:8080 
 
 ## Display modes (Values ​​for MODULE_SEQUENCE)
 
