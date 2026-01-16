@@ -3,23 +3,14 @@
  * 
  * Features:
  * - DSP chain (19 kHz PLL locked)
- * - Precision Pilot Measurement (IQ demod + RMS) measured on RAW MPX using PLL phase
- * - Precision RDS Measurement (IQ demod + RMS) with Dual-Mode reference:
- *      - If pilot present: 57 kHz = 3 * pilot phase
- *      - If pilot absent: dedicated 57 kHz PLL locks directly to RDS subcarrier
- * - Pilot-present gating (pilot RMS vs broadband MPX RMS)
+ * - Precision Pilot Measurement (IQ demod + RMS)
+ * - Precision RDS Measurement (IQ demod + RMS) with Dual-Mode reference
+ * - Pilot-present gating
  * - Real-time FFT Spectrum
  * - Dynamic Config Reload
- * - MPX "m" improved:
- *    - TruePeak via cubic (Catmull-Rom) interpolation (factor 4 or 8)
- *    - Peak Hold / Release envelope
- *    - Optional MPX peak-path lowpass (~100 kHz, clamped to SR)
- *
- * JSON output format unchanged:
- *   {"p":..., "r":..., "m":..., "s":[...]}
- *
- * Notes:
- * - If SR=192k, Nyquist=96k. "100 kHz LPF" is clamped to 0.45*SR (=86.4 kHz).
+ * - MPX TruePeak (Catmull-Rom 4x/8x)
+ * - DC Blocker (High-pass) 
+ * - ITU-R BS.412 MPX Power Measurement (60s Integration)
  *
  * Compile Linux (static):              gcc MPXCapture.c -O3 -ffast-math -lm -static -o MPXCapture
  * Compile Linux (max compatibility):   gcc MPXCapture.c -O3 -ffast-math -fno-tree-vectorize -lm -static -o MPXCapture
@@ -56,6 +47,9 @@ float G_MeterGain = 1.0f;
 float G_SpectrumGain = 1.0f;
 
 // Calibration/display scaling
+// NOTE: For BS.412 calculation to work correctly, G_MeterMPXScale
+// must scale the input (0..1.0) to actual kHz deviation. 
+// E.g. if 1.0 input = 100kHz deviation, this should be 100.0.
 float G_MeterPilotScale = 1.0f;
 float G_MeterMPXScale   = 100.0f;
 float G_MeterRDSScale   = 1.0f;
@@ -223,6 +217,30 @@ static float BiQuad_Process(BiQuadFilter *f, float x) {
             - f->a1 * f->y1 - f->a2 * f->y2;
     f->x2 = f->x1; f->x1 = x;
     f->y2 = f->y1; f->y1 = y;
+    return y;
+}
+
+/* ============================================================
+   DC BLOCKER
+   ============================================================ */
+typedef struct {
+    float x1;
+    float y1;
+    float R;
+} DCBlocker;
+
+static void DCBlocker_Init(DCBlocker *d) {
+    d->x1 = 0.0f;
+    d->y1 = 0.0f;
+    // R = 0.9995 creates a HPF cutoff < 5 Hz at standard rates
+    // y[n] = x[n] - x[n-1] + R * y[n-1]
+    d->R  = 0.9995f; 
+}
+
+static float DCBlocker_Process(DCBlocker *d, float x) {
+    float y = x - d->x1 + d->R * d->y1;
+    d->x1 = x;
+    d->y1 = y;
     return y;
 }
 
@@ -690,6 +708,21 @@ int main(int argc, char **argv)
         window[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * (float)i / (float)(fftSize - 1)));
     }
 
+    // --- DC BLOCKER INIT ---
+    DCBlocker dcBlocker;
+    DCBlocker_Init(&dcBlocker);
+
+    // --- BS.412 INIT ---
+    // 60-second sliding window integration via 1-pole IIR
+    float bs412_power = 0.0f;
+    float bs412_alpha = exp_alpha_from_tau((float)sr, 60.0f);
+    
+    // Reference Power for 0 dBr:
+    // Defined as power of a sinusoidal tone with +/- 19 kHz deviation.
+    // This value (180.5) assumes that the input signal is scaled to kHz units before squaring.
+    // Power = (Amp/sqrt(2))^2 = (19^2)/2 = 361/2 = 180.5
+    const float BS412_REF_POWER = 180.5f;
+
     // Demod
     MpxDemodulator demod;
     MpxDemod_Init(&demod, sr);
@@ -721,6 +754,7 @@ int main(int argc, char **argv)
     // Display smoothing
     float smoothP = 0.0f;
     float smoothR = 0.0f;
+    float smoothB = -99.0f; // BS412 smooth display
 
     int counter = 0;
     int configCheckCounter = 0;
@@ -755,10 +789,20 @@ int main(int argc, char **argv)
                 }
             }
 
-            float v = (active_channel == 0 ? vL : vR) * BASE_PREAMP;
+            float vRaw = (active_channel == 0 ? vL : vR) * BASE_PREAMP;
+
+            // --- DC BLOCKER (Before gain/calibration) ---
+            float v = DCBlocker_Process(&dcBlocker, vRaw);
 
             float vMeters = v * G_MeterGain;
             float vSpec   = v * G_SpectrumGain;
+
+            // --- BS.412 MPX POWER MEASUREMENT ---
+            // Calculate using the SCALED value (assuming G_MeterMPXScale maps 1.0 to 100 kHz)
+            // If the signal is not scaled to kHz, the result will be wrong.
+            float vScaledForPower = vMeters * G_MeterMPXScale;
+            float pwrInst = vScaledForPower * vScaledForPower;
+            bs412_power += (pwrInst - bs412_power) * bs412_alpha;
 
             // --- MPX PEAK PATH ONLY ---
             float vPeak = vMeters;
@@ -787,12 +831,18 @@ int main(int argc, char **argv)
                 if (smoothP == 0.0f) smoothP = pScaled; else smoothP = smoothP * 0.90f + pScaled * 0.10f;
                 if (smoothR == 0.0f) smoothR = rScaled; else smoothR = smoothR * 0.90f + rScaled * 0.10f;
 
+                // BS.412 dBr calculation (relative to 19kHz sine power)
+                float bs412_dBr = 10.0f * log10f((bs412_power + 1e-12f) / BS412_REF_POWER);
+                
+                // Slower smoothing for BS412 text display
+                if (smoothB < -90.0f) smoothB = bs412_dBr; else smoothB = smoothB * 0.98f + bs412_dBr * 0.02f;
+
                 float mFinal = envPeak * G_MeterMPXScale;
 
                 if (fftIndex >= fftSize) {
                     QuickFFT(fftBuf, fftSize);
 
-                    printf("{\"p\":%.4f,\"r\":%.4f,\"m\":%.4f,\"s\":[", smoothP, smoothR, mFinal);
+                    printf("{\"p\":%.4f,\"r\":%.4f,\"m\":%.4f,\"b\":%.4f,\"s\":[", smoothP, smoothR, mFinal, smoothB);
 
                     for (int k = 0; k < maxBin; k++) {
                         float mag = hypotf(fftBuf[k].r, fftBuf[k].i);
