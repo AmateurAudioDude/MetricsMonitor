@@ -1295,108 +1295,151 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
   // ====================================================================================
   let rec = null;
   let targetDevice = "";
-  
-  if (MPX_MODE === "off" && MPX_INPUT_CARD === "") {
-      logInfo("[MPX] Mode is 'off' -> MPX Capture Disabled.");
-  } 
-  else {
-      // Determine Input Device
-      if (MPX_INPUT_CARD && MPX_INPUT_CARD !== "") {
-          targetDevice = MPX_INPUT_CARD;
-          logInfo(`[MPX] Using device from plugin config: "${targetDevice}"`);
-      } 
-      else {
-          // If no specific MPXInputCard is set, ALWAYS fallback to main config
-          if (mainConfig && mainConfig.audio && mainConfig.audio.audioDevice && mainConfig.audio.audioDevice !== "") {
-              targetDevice = mainConfig.audio.audioDevice;
-              logInfo(`[MPX] MPXInputCard empty -> Fallback to main config audioDevice: "${targetDevice}"`);
-          } else {
-              targetDevice = "Default";
-              logWarn("[MPX] MPXInputCard empty AND main config empty -> Using 'Default'.");
-          }
+
+  /* ============================
+     RECONNECT / RETRY STATE
+     ============================ */
+  let resetTimeout = null;
+  let retryTimeout = null;
+  let retryAttempts = 0;
+  const RECONNECT_MAX_RETRIES = 30;
+  const RECONNECT_RETRY_DELAY = 15;
+
+  function attemptReconnect() {
+      if (retryAttempts >= RECONNECT_MAX_RETRIES) {
+          logError("[MPX] Maximum retry attempts reached. MPXCapture will not restart.");
+          return;
       }
+
+      retryAttempts += 1;
+
+      logInfo(
+          `[MPX] Waiting for ${RECONNECT_RETRY_DELAY} seconds before attempting to reconnect...`
+      );
+
+      if (retryTimeout) clearTimeout(retryTimeout);
+      if (resetTimeout) clearTimeout(resetTimeout);
+
+      retryTimeout = setTimeout(() => {
+          startMPXCapture();
+
+          resetTimeout = setTimeout(() => {
+              retryAttempts = 0;
+          }, (RECONNECT_RETRY_DELAY * 1000) + (30 * 1000));
+      }, RECONNECT_RETRY_DELAY * 1000);
   }
 
-  // --- STARTUP ---
+  function startMPXCapture() {
 
-  if (MPX_MODE !== "off" || (MPX_MODE === "off" && MPX_INPUT_CARD !== "") && MPX_EXE_PATH && fs.existsSync(MPX_EXE_PATH)) {
+      logInfo(`[MPX] Attempt #${retryAttempts + 1} to start MPXCapture...`);
 
-    if (osPlatform !== "win32") {
-        try { fs.chmodSync(MPX_EXE_PATH, 0o755); } catch (e) {}
-    }
+      if (MPX_MODE === "off" && MPX_INPUT_CARD === "") {
+          logInfo("[MPX] Mode is 'off' -> MPX Capture Disabled.");
+          return;
+      } 
+      else {
+          // Determine Input Device
+          if (MPX_INPUT_CARD && MPX_INPUT_CARD !== "") {
+              targetDevice = MPX_INPUT_CARD;
+              logInfo(`[MPX] Using device from plugin config: "${targetDevice}"`);
+          } 
+          else {
+              // If no specific MPXInputCard is set, ALWAYS fallback to main config
+              if (mainConfig && mainConfig.audio && mainConfig.audio.audioDevice && mainConfig.audio.audioDevice !== "") {
+                  targetDevice = mainConfig.audio.audioDevice;
+                  logInfo(`[MPX] MPXInputCard empty -> Fallback to main config audioDevice: "${targetDevice}"`);
+              } else {
+                  targetDevice = "Default";
+                  logWarn("[MPX] MPXInputCard empty AND main config empty -> Using 'Default'.");
+              }
+          }
+      }
 
-    logInfo(`[MPX] Starting MPXCapture`);
+      // --- STARTUP ---
 
-    /* =====================================================
-       WINDOWS: MPXCapture opens Audio itself
-       ===================================================== */
-    if (osPlatform === "win32") {
+      if (MPX_MODE !== "off" || (MPX_MODE === "off" && MPX_INPUT_CARD !== "") && MPX_EXE_PATH && fs.existsSync(MPX_EXE_PATH)) {
 
-        logInfo(
-            `[MPX] Direct audio mode (Windows) | Rate=${SAMPLE_RATE}, Dev="${targetDevice}", FFT=${FFT_SIZE}`
-        );
+        if (osPlatform !== "win32") {
+            try { fs.chmodSync(MPX_EXE_PATH, 0o755); } catch (e) {}
+        }
 
-        const absConfigPath = path.resolve(configFilePath);
-        const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
+        logInfo(`[MPX] Starting MPXCapture`);
 
-        logInfo(`[MPX] Spawning C# Binary with Config: "${absConfigPath}"`);
+        /* =====================================================
+           WINDOWS: MPXCapture opens Audio itself
+           ===================================================== */
+        if (osPlatform === "win32") {
 
-        rec = spawn(
-            MPX_EXE_PATH,
-            [
-                String(SAMPLE_RATE),
-                deviceArg,
-                String(FFT_SIZE),
-                absConfigPath
-            ],
-            {
+            logInfo(
+                `[MPX] Direct audio mode (Windows) | Rate=${SAMPLE_RATE}, Dev="${targetDevice}", FFT=${FFT_SIZE}`
+            );
 
-                cwd: path.resolve(__dirname, "../../"), 
-                env: {
-                    ...process.env,
-                    PYTHONUNBUFFERED: "1"
+            const absConfigPath = path.resolve(configFilePath);
+            const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
+
+            logInfo(`[MPX] Spawning C# Binary with Config: "${absConfigPath}"`);
+
+            rec = spawn(
+                MPX_EXE_PATH,
+                [
+                    String(SAMPLE_RATE),
+                    deviceArg,
+                    String(FFT_SIZE),
+                    absConfigPath
+                ],
+                {
+
+                    cwd: path.resolve(__dirname, "../../"), 
+                    env: {
+                        ...process.env,
+                        PYTHONUNBUFFERED: "1"
+                    }
                 }
-            }
-        );
+            );
 
-    /* =====================================================
-       LINUX: arecord -> stdin -> MPXCapture
-       ===================================================== */
-    } else {
-        const escapedConfigPath = configFilePath.replace(/"/g, '\\"');
-        const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
+        /* =====================================================
+           LINUX: arecord -> stdin -> MPXCapture
+           ===================================================== */
+        } else {
+            const escapedConfigPath = configFilePath.replace(/"/g, '\\"');
+            const deviceArg = (targetDevice && targetDevice.length > 0) ? targetDevice : "Default";
 
-        logInfo(
-        `[MPX] arecord -> MPXCapture | Rate=${SAMPLE_RATE}, Dev="${deviceArg}", Config="${configFilePath}"`
-        );
+            logInfo(
+            `[MPX] arecord -> MPXCapture | Rate=${SAMPLE_RATE}, Dev="${deviceArg}", Config="${configFilePath}"`
+            );
 
-        rec = spawn("bash", ["-c", `
+            rec = spawn("bash", ["-c", `
     arecord -F 25000 -D "${deviceArg}" \
     -c2 -r${SAMPLE_RATE} -f FLOAT_LE \
     -t raw -q \
     | "${MPX_EXE_PATH}" ${SAMPLE_RATE} "Default" ${FFT_SIZE} "${escapedConfigPath}"
     `], {
-        stdio: ["ignore", "pipe", "pipe"]
+            stdio: ["ignore", "pipe", "pipe"]
+            });
+        }
+
+        /* =====================================================
+           STDERR -> Log
+           ===================================================== */
+        rec.stderr.on("data", (d) => {
+            const msg = d.toString().trim();
+            if (msg.length) logInfo("[MPXCapture]", msg);
+        });
+
+        /* =====================================================
+           JSON Reader (stdout)
+           ===================================================== */
+        setupJsonReader(rec);
+
+        rec.on("close", (code) => {
+            logInfo("[MPX] MPXCapture exited with code:", code);
+            attemptReconnect();
         });
     }
+  }
 
-    /* =====================================================
-       STDERR -> Log
-       ===================================================== */
-    rec.stderr.on("data", (d) => {
-        const msg = d.toString().trim();
-        if (msg.length) logInfo("[MPXCapture]", msg);
-    });
-
-    /* =====================================================
-       JSON Reader (stdout)
-       ===================================================== */
-    setupJsonReader(rec);
-
-    rec.on("close", (code) => {
-        logInfo("[MPX] MPXCapture exited with code:", code);
-    });
-}
+  // Initial start
+  startMPXCapture();
 
 // ====================================================================================
 //  MAIN BROADCAST LOOP (V2.5 - Dynamic Scaling)
