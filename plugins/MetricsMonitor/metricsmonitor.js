@@ -40,6 +40,7 @@ const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is 
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
+const EnableOscilloscope = 1;    // Do not touch - this value is automatically updated via the config file
 const MeterTiltCalibration = -900;    // Do not touch - this value is automatically updated via the config file
 
   // =========================================================
@@ -507,59 +508,47 @@ function syncTextWebSocketMode(isInitial) {
   // =========================================================
   // Cleanup function for current mode
   // =========================================================
-  function cleanupCurrentMode() {
-    //console.log('mode:', mode, ' c-mode:', activeCanvasMode, ' c-visible:', isCanvasVisible);
-    if (!isCanvasVisible || activeCanvasMode !== 2) {
-      if (mode === 1 && window.MetricsAnalyzer?.cleanup) window.MetricsAnalyzer.cleanup();
-      if (mode === 2 && window.MetricsMeters?.cleanup) window.MetricsMeters.cleanup();
-      if (mode !== 1 && mode !== 2 && window.MetricsAnalyzer?.cleanup && window.MetricsMeters?.cleanup) {
-        window.MetricsAnalyzer.cleanup();
-        window.MetricsMeters.cleanup();
-      }
-    } else if (isCanvasVisible && activeCanvasMode === 2) {
-      if (mode !== 1) window.MetricsMeters?.createWebSocket();
-      if (mode !== 2) {
-        // --- 1. Analyzer Init ---
-        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.init === "function") {
-          window.MetricsAnalyzer.init("mm-combo-analyzer-container", {
-            instanceKey: "combo-main",
-            embedded: true,
-            useLegacyCss: false
-          });
+  // Cleanup and destroy instances and check if WebSocket should close
+  function cleanupCurrentMode(isModeSwitch = false, oldMode = null) {
+    const modeToCleanup = oldMode !== null ? oldMode : mode;
+    console.log(`[MM] cleanupCurrentMode - isModeSwitch: ${isModeSwitch}, modeToCleanup: ${modeToCleanup}, currentMode: ${mode}, combo visible: ${isCanvasVisible}`);
 
-          // Safe Resize
-          setTimeout(() => {
-            const wrap = document.getElementById("mm-combo-analyzer-container");
-            const canvas = wrap ? (wrap.querySelector("canvas") || document.querySelector("#mm-combo-analyzer-container canvas")) : null;
-
-            if (wrap && canvas) {
-                wrap.style.border = "none";
-                const safeResize = () => {
-                    const width = wrap.clientWidth;
-                    const height = wrap.clientHeight;
-                    if (!width || width === 0) { window.requestAnimationFrame(safeResize); return; }
-                    const dpr = window.devicePixelRatio || 1;
-                    if (canvas.width !== Math.floor(width * dpr)) {
-                         canvas.width = Math.floor(width * dpr);
-                         canvas.height = Math.floor(height * dpr);
-                         const ctx = canvas.getContext("2d");
-                         if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                         try {
-                            if (typeof Chart !== "undefined" && Chart.getChart) {
-                                const ch = Chart.getChart(canvas);
-                                if (ch) ch.resize();
-                            }
-                        } catch(e){}
-                    }
-                };
-                window.requestAnimationFrame(safeResize);
-                const resizeObserver = new ResizeObserver(() => { window.requestAnimationFrame(safeResize); });
-                resizeObserver.observe(wrap);
-            } 
-          }, 200); 
+    if (isModeSwitch) {
+      // Destroy mini instances when switching modes
+      if (modeToCleanup === 1) {
+        console.log('[MM] Destroying mini meters');
+        const container = document.getElementById("level-meter-container");
+        if (container) container.innerHTML = "";
+        // Also cleanup meters WebSocket if it exists (pass container ID for reference counting)
+        if (window.MetricsMeters?.cleanup) {
+          console.log('[MM] Calling MetricsMeters.cleanup() for level-meter-container');
+          window.MetricsMeters.cleanup('level-meter-container');
         }
       }
+      if (modeToCleanup === 2) {
+        console.log('[MM] Destroying mini analyzer');
+        if (window.MetricsAnalyzer?.destroy) {
+          window.MetricsAnalyzer.destroy('level-meter-container');
+        }
+      }
+    }
 
+    // Check if WebSocket should be closed
+    checkAndCloseWebSocket();
+  }
+
+  // Central function to decide if WebSocket should be open or closed
+  function checkAndCloseWebSocket() {
+    const comboOpen = isCanvasVisible && activeCanvasMode === 2;
+    const miniNeedsWebSocket = (mode === 1 || mode === 2);
+    const shouldBeOpen = comboOpen || miniNeedsWebSocket;
+
+    console.log(`[MM] WebSocket check - combo: ${comboOpen}, mini needs: ${miniNeedsWebSocket}, should be open: ${shouldBeOpen}`);
+
+    if (!shouldBeOpen) {
+      console.log('[MM] Closing WebSocket - nothing needs it');
+      if (window.MetricsMeters?.cleanup) window.MetricsMeters.cleanup();
+      if (window.MetricsAnalyzer?.cleanup) window.MetricsAnalyzer.cleanup();
     }
   }
 
@@ -569,8 +558,9 @@ function syncTextWebSocketMode(isInitial) {
   function switchModeWithFade(nextMode) {
     const meters = document.getElementById("level-meter-container");
     if (!meters) {
+      const oldMode = mode;
       mode = nextMode;
-      cleanupCurrentMode();  // Cleanup before switching
+      cleanupCurrentMode(true, oldMode);  // Mode switch, cleanup old mode
       buildMeters();
       syncTextWebSocketMode(false);
       return;
@@ -586,8 +576,9 @@ function syncTextWebSocketMode(isInitial) {
     meters.style.opacity = "0";
 
     setTimeout(() => {
+      const oldMode = mode;
       mode = nextMode;
-      cleanupCurrentMode();  // Cleanup before switching
+      cleanupCurrentMode(true, oldMode);  // Mode switch, cleanup old mode
       buildMeters();
       syncTextWebSocketMode(false);
 
@@ -1067,6 +1058,23 @@ ensureTextSocket().then(() => {
       // Prepare MM canvas
       if (activeCanvasMode === 2) {
         replaceMainCanvasWithMpxComboIfRequired(); // will append/show
+
+        // Destroy any existing combo instances first, in case combo was closed and reopened
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.destroy === 'function') {
+          console.log('[MM] Destroying existing combo analyzer instance (if any)');
+          window.MetricsAnalyzer.destroy('combo-main');
+        }
+
+        // Initialise analyzer first (creates WebSocket), then meters (reuses it)
+        // Always reinitialise when combo opens (if it was closed and reopened)
+        if (window.mmInitComboAnalyzer && typeof window.mmInitComboAnalyzer === 'function') {
+          console.log('[MM] Calling mmInitComboAnalyzer');
+          window.mmInitComboAnalyzer();
+        }
+        if (window.mmInitComboMeters && typeof window.mmInitComboMeters === 'function') {
+          console.log('[MM] Calling mmInitComboMeters');
+          window.mmInitComboMeters();
+        }
       } else if (activeCanvasMode === 4) {
         replaceMainCanvasIfRequired(); // will append/show
       }
@@ -1093,6 +1101,26 @@ ensureTextSocket().then(() => {
         button.setAttribute("aria-pressed","false");
 }
 
+      // Destroy combo instances to free up resources
+      if (activeCanvasMode === 2) {
+        console.log('[MM] Closing combo view - destroying combo instances');
+
+        // Destroy combo analyzer, will automatically send unsubscribe message
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.destroy === 'function') {
+          window.MetricsAnalyzer.destroy('combo-main');
+        }
+
+        // Cleanup combo meters
+        if (window.MetricsMeters?.cleanup) {
+          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-container');
+          window.MetricsMeters.cleanup('mm-combo-meters-container');
+        }
+
+        // Clear combo meters container
+        const comboMetersContainer = document.getElementById("mm-combo-meters-container");
+        if (comboMetersContainer) comboMetersContainer.innerHTML = "";
+      }
+
       // Hide MM elements
       if (mmContainerCombo) mmContainerCombo.style.display = "none";
       if (mmContainerSignal) mmContainerSignal.style.display = "none";
@@ -1102,6 +1130,9 @@ ensureTextSocket().then(() => {
 
       // Show standard elements
       setStandardCanvasVisibility(true);
+
+      // Check if WebSocket should be closed now that combo is closed
+      checkAndCloseWebSocket();
 
       // Sync audio (trigger B0)
       syncTextWebSocketMode(false);
@@ -1211,6 +1242,23 @@ ensureTextSocket().then(() => {
     }
 
     setTimeout(() => {
+      // Destroy old mode instances before switching
+      if (activeCanvasMode === 2) {
+        console.log('[MM] Switching away from combo - destroying combo instances');
+        // Destroy combo analyzer
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.destroy === 'function') {
+          window.MetricsAnalyzer.destroy('combo-main');
+        }
+        // Cleanup combo meters
+        if (window.MetricsMeters?.cleanup) {
+          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-container');
+          window.MetricsMeters.cleanup('mm-combo-meters-container');
+        }
+        // Clear combo meters container
+        const comboMetersContainer = document.getElementById("mm-combo-meters-container");
+        if (comboMetersContainer) comboMetersContainer.innerHTML = "";
+      }
+
       // Ensure target exists
       if (targetMode === 2) replaceMainCanvasWithMpxComboIfRequired();
       else if (targetMode === 4) replaceMainCanvasIfRequired();
@@ -1220,12 +1268,12 @@ ensureTextSocket().then(() => {
           oldEl.style.display = 'none';
           oldEl.style.opacity = '1'; // reset for next time
       }
-      
+
       const createdEl = (targetMode === 2) ? document.getElementById("mm-mpx-combo-flex") : document.getElementById("mm-signal-analyzer-flex");
       if (createdEl) {
           createdEl.style.opacity = '0';
           createdEl.style.display = 'flex';
-          
+
           requestAnimationFrame(() => {
              createdEl.style.transition = `opacity ${FADE_MS}ms`;
              createdEl.style.opacity = '1';
@@ -1233,12 +1281,25 @@ ensureTextSocket().then(() => {
       }
 
       activeCanvasMode = targetMode;
+
+      // Reinitialise combo components when switching back to mode 2
+      if (targetMode === 2) {
+        if (window.mmInitComboAnalyzer && typeof window.mmInitComboAnalyzer === 'function') {
+          console.log('[MM] Reinitializing combo analyzer after mode switch');
+          window.mmInitComboAnalyzer();
+        }
+        if (window.mmInitComboMeters && typeof window.mmInitComboMeters === 'function') {
+          console.log('[MM] Reinitializing combo meters after mode switch');
+          window.mmInitComboMeters();
+        }
+      }
+
       syncTextWebSocketMode(false);
-      
+
       // Update scaling immediately for new element
       if (targetMode === 2 && window.mmTriggerResize) window.mmTriggerResize();
       if (targetMode === 4 && window.mmTriggerResizeSignal) window.mmTriggerResizeSignal();
-      
+
       setTimeout(() => { isCanvasSwitching = false; }, FADE_MS);
 
       cleanupCurrentMode();  // Cleanup before switching on canvas mode switch
@@ -1688,17 +1749,20 @@ ensureTextSocket().then(() => {
     analyzerContainer.id = "mm-combo-analyzer-container";
     rightCol.appendChild(analyzerContainer);
 
-    // --- 1. Analyzer Init ---
-    if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.init === "function") {
-      window.MetricsAnalyzer.init("mm-combo-analyzer-container", {
-        instanceKey: "combo-main",
-        embedded: true,
-        useLegacyCss: false
-      });
+    // --- 1. Analyzer Init (Lazy, only when canvas is visible) ---
+    // Store initialisation function to be called when canvas becomes visible
+    window.mmInitComboAnalyzer = function() {
+      if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.init === "function") {
+        console.log('[MM] Initializing combo analyzer (lazy init)');
+        window.MetricsAnalyzer.init("mm-combo-analyzer-container", {
+          instanceKey: "combo-main",
+          embedded: true,
+          useLegacyCss: false
+        });
 
-      // Safe Resize
-      setTimeout(() => {
-        const wrap = document.getElementById("mm-combo-analyzer-container");
+        // Safe Resize
+        setTimeout(() => {
+          const wrap = document.getElementById("mm-combo-analyzer-container");
         const canvas = wrap ? (wrap.querySelector("canvas") || document.querySelector("#mm-combo-analyzer-container canvas")) : null;
 
         if (wrap && canvas) {
@@ -1724,19 +1788,32 @@ ensureTextSocket().then(() => {
             window.requestAnimationFrame(safeResize);
             const resizeObserver = new ResizeObserver(() => { window.requestAnimationFrame(safeResize); });
             resizeObserver.observe(wrap);
-        } 
-      }, 200); 
+        }
+        }, 200);
+      }
+    };
+
+    // Only initialise if canvas is already visible on page load
+    if (isCanvasVisible && activeCanvasMode === 2) {
+      console.log('[MM] Canvas visible on page load, initializing combo analyzer immediately');
+      window.mmInitComboAnalyzer();
+    } else {
+      console.log('[MM] Canvas not visible on page load, deferring combo analyzer initialization');
     }
 
-    // --- 2. Meters Init ---
-    if (window.MetricsMeters && window.MetricsMeters.initMeters) {
-      setTimeout(() => {
-        window.MetricsMeters.initMeters(metersContainer);
-        if (window.MetricsMeters.startAnimation) window.MetricsMeters.startAnimation(); 
+    // --- 2. Meters Init (Lazy - only when canvas is visible) ---
+    window.mmInitComboMeters = function() {
+      if (window.MetricsMeters && window.MetricsMeters.initMeters) {
+        setTimeout(() => {
+          console.log('[MM] Initializing combo meters (lazy init)');
+          // Pass true to allow WebSocket setup - meters will reuse analyzer's WebSocket
+          // via getSharedSocket() if analyzer is already initialized
+          window.MetricsMeters.initMeters(metersContainer, true);
+          if (window.MetricsMeters.startAnimation) window.MetricsMeters.startAnimation();
 
         const COMBO_PREFIX = "mm-combo-";
         const idsToPrefix = ["left-meter", "right-meter", "hf-meter", "stereo-pilot-meter", "rds-meter", "mpx-meter"];
-        
+
         idsToPrefix.forEach((id) => {
           const el = metersContainer.querySelector(`#${id}`);
           if (el) {
@@ -1748,7 +1825,16 @@ ensureTextSocket().then(() => {
           }
         });
 
-      }, 250);
+        }, 250);
+      }
+    };
+
+    // Only initialise if canvas is already visible on page load
+    if (isCanvasVisible && activeCanvasMode === 2) {
+      console.log('[MM] Canvas visible on page load, initializing combo meters immediately');
+      window.mmInitComboMeters();
+    } else {
+      console.log('[MM] Canvas not visible on page load, deferring combo meters initialization');
     }
   }
   

@@ -56,6 +56,7 @@ public static class Config
     // Processing Options
     public static int TruePeakFactor = 8;
     public static int MPX_LPF_100kHz = 1;
+    public static bool EnableOscilloscope = true; // Set to false to disable oscilloscope
 
     private static string _configPath = "metricsmonitor.json";
     private static DateTime _lastModTime;
@@ -139,7 +140,11 @@ public static class Config
 
                 MPX_LPF_100kHz = GetInt("MPX_LPF_100kHz", MPX_LPF_100kHz) != 0 ? 1 : 0;
 
-                Console.Error.WriteLine($"[MPX] Config Update: Gain={MeterInputCalibrationDB:F2}dB Tilt={MPXTiltCalibrationUs:F1}us");
+                // Read EnableOscilloscope option (default: true)
+                int enableOsc = GetInt("EnableOscilloscope", 1);
+                EnableOscilloscope = (enableOsc != 0);
+
+                Console.Error.WriteLine($"[MPX] Config Update: Gain={MeterInputCalibrationDB:F2}dB Tilt={MPXTiltCalibrationUs:F1}us Oscilloscope={EnableOscilloscope}");
             }
         }
         catch (Exception ex)
@@ -865,26 +870,29 @@ class Program
                         fftIndex = 0;
                     }
 
-                    // --- 2. Oscilloscope Trigger Logic ---
-                    if (!scopeTrigger)
+                    // --- 2. Oscilloscope Trigger Logic (only if enabled) ---
+                    if (Config.EnableOscilloscope)
                     {
-                        // Trigger on processing signal (mpxProc) for stable zero crossing without DC offset
-                        if (prevScopeSample < 0f && mpxProc >= 0f)
+                        if (!scopeTrigger)
                         {
-                            scopeTrigger = true;
-                            scopeIndex = 0;
+                            // Trigger on processing signal (mpxProc) for stable zero crossing without DC offset
+                            if (prevScopeSample < 0f && mpxProc >= 0f)
+                            {
+                                scopeTrigger = true;
+                                scopeIndex = 0;
+                            }
                         }
-                    }
 
-                    if (scopeTrigger && scopeIndex < scopeBuf.Length)
-                    {
-                        // Apply Tilt Correction here specifically for the visual scope buffer
-                        float scopeSample = tiltCorrector.Process(vRaw);
-                        scopeBuf[scopeIndex++] = scopeSample;
-                    }
+                        if (scopeTrigger && scopeIndex < scopeBuf.Length)
+                        {
+                            // Apply Tilt Correction here specifically for the visual scope buffer
+                            float scopeSample = tiltCorrector.Process(vRaw);
+                            scopeBuf[scopeIndex++] = scopeSample;
+                        }
 
-                    if (scopeIndex >= scopeBuf.Length) scopeTrigger = false;
-                    prevScopeSample = mpxProc;
+                        if (scopeIndex >= scopeBuf.Length) scopeTrigger = false;
+                        prevScopeSample = mpxProc;
+                    }
 
                     // --- 3. Output JSON Logic (Timer Based) ---
                     if (++samplesSinceLastOutput >= outputThresh)
@@ -901,12 +909,15 @@ class Program
                             if (k < (fftSize / 2) - 1) sb.Append(",");
                         }
 
-                        // --- B. Oscilloscope Data (Snapshot) ---
+                        // --- B. Oscilloscope Data (Snapshot) - only if enabled ---
                         sb.Append("],\"o\":[");
-                        for (int k = 0; k < scopeBuf.Length; k++)
+                        if (Config.EnableOscilloscope)
                         {
-                            sb.Append(scopeBuf[k].ToString("0.0000", CultureInfo.InvariantCulture));
-                            if (k < scopeBuf.Length - 1) sb.Append(",");
+                            for (int k = 0; k < scopeBuf.Length; k++)
+                            {
+                                sb.Append(scopeBuf[k].ToString("0.0000", CultureInfo.InvariantCulture));
+                                if (k < scopeBuf.Length - 1) sb.Append(",");
+                            }
                         }
 
                         // --- C. Meters ---

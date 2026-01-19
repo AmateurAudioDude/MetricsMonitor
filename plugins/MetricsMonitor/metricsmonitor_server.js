@@ -94,7 +94,10 @@ const defaultConfig = {
   MeterColorWarning: "rgb(255, 255,0)", // RGB Array (Yellow)
   MeterColorDanger: "rgb(255, 0, 0)",   // RGB Array (Red)
   PeakMode: "dynamic",                  // "dynamic" or "fixed"
-  PeakColorFixed: "rgb(251, 174, 38)"   // RGB Color for fixed peak
+  PeakColorFixed: "rgb(251, 174, 38)",  // RGB Color for fixed peak
+
+  // 9. Performance Options
+  EnableOscilloscope: 1                 // Enable oscilloscope mode (1=on, 0=off)
 };
 
 /**
@@ -230,6 +233,8 @@ function normalizePluginConfig(json) {
     MeterColorDanger: typeof json.MeterColorDanger !== "undefined" ? json.MeterColorDanger : defaultConfig.MeterColorDanger,
     PeakMode: typeof json.PeakMode !== "undefined" ? json.PeakMode : defaultConfig.PeakMode,
     PeakColorFixed: typeof json.PeakColorFixed !== "undefined" ? json.PeakColorFixed : defaultConfig.PeakColorFixed,
+
+    EnableOscilloscope: typeof json.EnableOscilloscope !== "undefined" ? json.EnableOscilloscope : defaultConfig.EnableOscilloscope,
   };
 
   // Preserve any extra custom keys
@@ -371,6 +376,9 @@ let METER_COLOR_DANGER;
 let PEAK_MODE;
 let PEAK_COLOR_FIXED;
 
+// Performance
+let ENABLE_OSCILLOSCOPE;
+
 // Feature Toggles
 let isModule2Active;
 let ENABLE_MPX;
@@ -428,6 +436,9 @@ function applyConfig(newConfig) {
     METER_COLOR_DANGER = JSON.stringify(configPlugin.MeterColorDanger || "rgb(255, 0, 0)");
     PEAK_MODE = String(configPlugin.PeakMode || "dynamic");
     PEAK_COLOR_FIXED = String(configPlugin.PeakColorFixed || "rgb(251, 174, 38)");
+    
+    // Performance
+    ENABLE_OSCILLOSCOPE = Number(configPlugin.EnableOscilloscope) || 0;
     
     // Update feature toggles
     isModule2Active = sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
@@ -634,7 +645,8 @@ function updateSettings() {
           `const MeterColorWarning = ${METER_COLOR_WARNING};    // Do not touch - this value is automatically updated via the config file\n` +
           `const MeterColorDanger = ${METER_COLOR_DANGER};    // Do not touch - this value is automatically updated via the config file\n` +
           `const PeakMode = "${PEAK_MODE}";    // Do not touch - this value is automatically updated via the config file\n` +
-          `const PeakColorFixed = "${PEAK_COLOR_FIXED}";    // Do not touch - this value is automatically updated via the config file\n` 
+          `const PeakColorFixed = "${PEAK_COLOR_FIXED}";    // Do not touch - this value is automatically updated via the config file\n` +
+          `const EnableOscilloscope = ${ENABLE_OSCILLOSCOPE};    // Do not touch - this value is automatically updated via the config file\n`
         );
     }
 
@@ -692,7 +704,8 @@ function updateSettings() {
         .replace(/^\s*const\s+MeterColorWarning\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+MeterColorDanger\s*=.*;[^\n]*\n?/gm, "")
         .replace(/^\s*const\s+PeakMode\s*=.*;[^\n]*\n?/gm, "")
-        .replace(/^\s*const\s+PeakColorFixed\s*=.*;[^\n]*\n?/gm, "");
+        .replace(/^\s*const\s+PeakColorFixed\s*=.*;[^\n]*\n?/gm, "")
+        .replace(/^\s*const\s+EnableOscilloscope\s*=.*;[^\n]*\n?/gm, "");
 
         out = out.replace(
         /^\s*\/\/\s*Do not touch - this value is automatically updated via the config file\s*$/gm,
@@ -1101,6 +1114,13 @@ updateAllClientFiles();
 setupFileWatcher();
 
 // ====================================================================================
+//  MPX CLIENT STATE (TOP-LEVEL, TRACK CLIENTS AND REMOVE DISCONNECTED CLIENTS)
+// ====================================================================================
+const lastSeen = new Map(); // clientId -> timestamp
+const LEASE_MS = 15000;     // 15 seconds lease timeout
+let leaseInterval = null;
+
+// ====================================================================================
 //  MAIN SERVER LOGIC START
 //  This is where the actual signal processing loop begins.
 // ====================================================================================
@@ -1253,10 +1273,84 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
       logError("[MPX] /data_plugins WebSocket error:", err);
     });
 
-    dataPluginsWs.on("message", () => {});
+    // -------------------------------
+    // MPX SUBSCRIBE HANDLING
+    // -------------------------------
+    dataPluginsWs.on("message", (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (msg.type !== "MPX_SUBSCRIBE") return;
+
+      const clientId = msg.clientId || 'unknown';
+      const now = Date.now();
+
+      // Refresh lastSeen on any MPX_SUBSCRIBE
+      lastSeen.set(clientId, now);
+
+      // ---- Active clients ----
+      if (msg.active === true) {
+        activeClients.add(clientId);
+      } else if (msg.active === false) {
+        activeClients.delete(clientId);
+        spectrumSubscribers.delete(clientId);
+        scopeSubscribers.delete(clientId);
+        lastSeen.delete(clientId);
+        //logInfo(`[MPX] Client ${clientId} is now inactive`);
+      }
+
+      // ---- Spectrum subscribers ----
+      if (msg.spectrum === true) {
+        spectrumSubscribers.add(clientId);
+        activeClients.add(clientId); // spectrum implies active
+      } else if (msg.spectrum === false && msg.active !== false) {
+        spectrumSubscribers.delete(clientId);
+      }
+
+      // ---- Oscilloscope subscribers (v2.1) ----
+      if (msg.scope === true) {
+        scopeSubscribers.add(clientId);
+        activeClients.add(clientId); // scope implies active
+      } else if (msg.scope === false && msg.active !== false) {
+        scopeSubscribers.delete(clientId);
+      }
+
+      // ---- Final state ----
+      needsSpectrum = spectrumSubscribers.size > 0;
+      needsScope = scopeSubscribers.size > 0;
+      //logInfo(`[MPX] Active clients: ${activeClients.size}, Spectrum: ${spectrumSubscribers.size}, Scope: ${scopeSubscribers.size}`);
+    });
   }
 
+  // Start WebSocket
   connectDataPluginsWs();
+
+  // ====================================================================================
+  //  LEASE MONITOR — REMOVES CLIENTS THAT STOPPED SENDING MPX_SUBSCRIBE
+  // ====================================================================================
+  if (!leaseInterval) {
+    leaseInterval = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+
+      for (const [clientId, ts] of lastSeen.entries()) {
+        if (now - ts > LEASE_MS) {
+          lastSeen.delete(clientId);
+          activeClients.delete(clientId);
+          spectrumSubscribers.delete(clientId);
+          scopeSubscribers.delete(clientId);
+          changed = true;
+
+          //logInfo(`[MPX] Client ${clientId} lease expired, synthesized inactive`);
+        }
+      }
+
+      if (changed) {
+        needsSpectrum = spectrumSubscribers.size > 0;
+        needsScope = scopeSubscribers.size > 0;
+        //logInfo(`[MPX] Active clients: ${activeClients.size}, Spectrum: ${spectrumSubscribers.size}, Scope: ${scopeSubscribers.size}`);
+      }
+    }, 2000);
+  }
 
   // ====================================================================================
   //  INPUT HANDLERS (Dual Mode Support)
@@ -1266,9 +1360,16 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
   let currentRdsPeak = 0;
   let currentMaxPeak = 0;
   let currentNoiseFloor = 0;
-  
+
   let latestMpxFrame = null;   // Spectrum (s)
   let latestScopeFrame = null; // Oscilloscope (o)
+  let needsSpectrum = true; // Track if clients need spectrum data (default true)
+  let needsScope = false; // Track if clients need oscilloscope data
+
+  // Track active clients and spectrum subscribers (shared across WebSocket connection)
+  const spectrumSubscribers = new Set();
+  const scopeSubscribers = new Set(); // Track oscilloscope subscribers
+  const activeClients = new Set();
 
   function setupJsonReader(childProcess) {
       if (!childProcess || !childProcess.stdout) return;
@@ -1293,7 +1394,7 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
               if (Array.isArray(data.s) && data.s.length > 0) {
                   latestMpxFrame = data.s;
               }
-              
+
               // Process Oscilloscope Data (o)
               if (Array.isArray(data.o) && data.o.length > 0) {
                   latestScopeFrame = data.o;
@@ -1559,28 +1660,35 @@ setInterval(() => {
     // -----------------------------------------------------------------------
     // SEND TO CLIENT
     // -----------------------------------------------------------------------
-    // Send both Spectrum (value) and Scope (scope) arrays
-    let finalSpectrum = [];
-    if (latestMpxFrame && latestMpxFrame.length > 0) {
-        finalSpectrum = latestMpxFrame;
+    // Only send data if there are active clients
+    // This prevents unnecessary bandwidth usage when no one is listening
+    if (activeClients.size === 0) {
+      return; // Skip sending if no active clients
     }
-    
+
+    // Send both Spectrum (value) and Scope (scope) arrays
+    // Only include spectrum/scope if clients need it (bandwidth optimisation)
+    let finalSpectrum = [];
+    if (needsSpectrum && latestMpxFrame && latestMpxFrame.length > 0) {
+        finalSpectrum = latestMpxFrame.map(v => parseFloat(v.toFixed(4)));
+    }
+
     let finalScope = [];
-    if (latestScopeFrame && latestScopeFrame.length > 0) {
-        finalScope = latestScopeFrame;
+    if (needsScope && latestScopeFrame && latestScopeFrame.length > 0) {
+        finalScope = latestScopeFrame.map(v => parseFloat(v.toFixed(4)));
     }
 
     const payload = JSON.stringify({
-      type: "MPX", 
+      type: "MPX",
       value: finalSpectrum, // 's' data from C#
       scope: finalScope,    // 'o' data from C#
-      peak: out_mpx, 
-      pilotKHz: out_pilot, 
-      rdsKHz: out_rds,
-      pilot: valP, 
-      rds: valR, 
-      noise: valN, 
-      snr: (valN > 1e-6) ? (valP / valN) : 0
+      peak: parseFloat(out_mpx.toFixed(4)),
+      pilotKHz: parseFloat(out_pilot.toFixed(4)),
+      rdsKHz: parseFloat(out_rds.toFixed(4)),
+      pilot: parseFloat(valP.toFixed(4)),
+      rds: parseFloat(valR.toFixed(4)),
+      noise: parseFloat(valN.toFixed(4)),
+      snr: (valN > 1e-6) ? parseFloat((valP / valN).toFixed(4)) : 0
     });
 
     dataPluginsWs.send(payload, () => {});

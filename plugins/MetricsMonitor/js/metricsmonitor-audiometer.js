@@ -40,6 +40,7 @@ const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is 
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
+const EnableOscilloscope = 1;    // Do not touch - this value is automatically updated via the config file
 const MeterTiltCalibration = -900;    // Do not touch - this value is automatically updated via the config file
 
     // ==========================================================

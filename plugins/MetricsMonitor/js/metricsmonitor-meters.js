@@ -40,6 +40,7 @@ const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is 
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
+const EnableOscilloscope = 1;    // Do not touch - this value is automatically updated via the config file
 const MeterTiltCalibration = -900;    // Do not touch - this value is automatically updated via the config file
 
     // Configuration constants (auto-updated by the server)
@@ -862,31 +863,131 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
         stereoAnimationId = requestAnimationFrame(loop);
     }
 
-    // Global socket variable to handle disconnects
+    // ===================================================================
+    // SHARED WEBSOCKET HUB (Reuse connection from analyzer if available)
+    // ===================================================================
     let mpxSocket = null;
+    let reconnectTimer = null;
+    let isMetersActive = false;
+    let leaseInterval = null; // KeepAlive
+    const KEEP_ALIVE_INTERVAL = 10000;
+
+    // Generate unique client ID for subscription tracking
+    const METERS_CLIENT_ID = 'meters_' + Math.random().toString(36).substr(2, 9);
+
+    // Track active meter containers (for reference counting to fix Combo freeze bug)
+    const activeContainers = new Set();
+
+    function sendKeepAlive(needsSpectrum, clientId, isActive) {
+      const msg = {
+          type: "MPX_SUBSCRIBE",
+          spectrum: needsSpectrum,
+          clientId: clientId,
+          active: isActive
+      };
+      if (mpxSocket) mpxSocket.send(JSON.stringify(msg));
+    }
+
+    function sendSubscription(socket, needsSpectrum, isActive) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            console.log('[MetricsMeters] Cannot send subscription, socket not ready');
+            return;
+        }
+
+        try {
+          sendKeepAlive(needsSpectrum, METERS_CLIENT_ID, isActive);
+          if (!leaseInterval) {
+            leaseInterval = setInterval(() => {
+              sendKeepAlive(needsSpectrum, METERS_CLIENT_ID, isActive);
+            }, KEEP_ALIVE_INTERVAL);
+          }
+          console.log(`[MetricsMeters] Subscription sent: spectrum=${needsSpectrum}, active=${isActive}`);
+        } catch (e) {
+            console.error('[MetricsMeters] Failed to send subscription:', e);
+        }
+    }
 
     function setupMetricsWebSocket() {
+        isMetersActive = true;
+
+        // Check if analyzer already has an active connection to reuse
+        if (window.MetricsAnalyzer && typeof window.MetricsAnalyzer.getSharedSocket === 'function') {
+            const sharedSocket = window.MetricsAnalyzer.getSharedSocket();
+            if (sharedSocket && (sharedSocket.readyState === WebSocket.OPEN || sharedSocket.readyState === WebSocket.CONNECTING)) {
+                console.log('[MetricsMeters] Reusing shared WebSocket from Analyzer');
+                mpxSocket = sharedSocket;
+                attachMessageHandler(mpxSocket);
+                // Send subscription immediately if socket is already open
+                if (sharedSocket.readyState === WebSocket.OPEN) {
+                    sendSubscription(sharedSocket, false, true);
+                }
+                return;
+            }
+        }
+
+        // Only create new connection if there isn't one
+        if (mpxSocket && (mpxSocket.readyState === WebSocket.OPEN || mpxSocket.readyState === WebSocket.CONNECTING)) {
+            console.log('[MetricsMeters] Reusing existing WebSocket connection');
+            // Make sure message handler is attached
+            attachMessageHandler(mpxSocket);
+            // Send subscription if socket is already open
+            if (mpxSocket.readyState === WebSocket.OPEN) {
+                sendSubscription(mpxSocket, false, true);
+            }
+            return;
+        }
+
         const currentURL = window.location;
         const webserverPort = currentURL.port || (currentURL.protocol === "https:" ? "443" : "80");
         const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
         const webserverURL = currentURL.hostname;
         const websocketURL = `${protocol}//${webserverURL}:${webserverPort}/data_plugins`;
 
-        if (mpxSocket && (mpxSocket.readyState === WebSocket.OPEN || mpxSocket.readyState === WebSocket.CONNECTING)) {
-            return;
-        }
-
-        if (mpxSocket) {
-            try {
-                mpxSocket.close();
-            } catch (e) {}
-            mpxSocket = null;
-        }
-
+        console.log('[MetricsMeters] Creating new WebSocket connection');
         const socket = new WebSocket(websocketURL);
         mpxSocket = socket;
 
-        socket.onmessage = (event) => {
+        socket.onopen = () => {
+            console.log('[MetricsMeters] WebSocket opened');
+            sendSubscription(socket, false, true);
+        };
+
+        attachMessageHandler(socket);
+
+        socket.onclose = () => {
+            if (!isMetersActive) return; // Don't reconnect if meters were closed
+            mpxSocket = null;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                if (isMetersActive) setupMetricsWebSocket();
+            }, 2500);
+        };
+
+        socket.onerror = () => {
+            mpxSocket = null;
+        };
+    }
+
+    function attachMessageHandler(socket) {
+        if (!socket) {
+            console.error('[MetricsMeters] Cannot attach handler - socket is null');
+            return;
+        }
+
+        // Only attach if not already attached
+        if (socket._metersHandler) {
+            console.log('[MetricsMeters] Message handler already attached');
+            return;
+        }
+
+        // Create and attach new handler
+        socket._metersHandler = (event) => {
+            if (!isMetersActive) {
+                console.log('[MetricsMeters] Ignoring message - meters not active');
+                return;
+            }
+
             let message;
             try {
                 message = JSON.parse(event.data);
@@ -914,29 +1015,89 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
             }
         };
 
-        socket.onclose = () => {
-            mpxSocket = null;
-        };
+        console.log('[MetricsMeters] Attaching message handler');
+        socket.addEventListener('message', socket._metersHandler);
     }
 
-    function closeMetricsWebSocket() {
-        if (mpxSocket) {
+    function closeMetricsWebSocket(containerId = null) {
+        // Unregister container (reference counting to fix Combo freeze bug)
+        if (containerId) {
+            activeContainers.delete(containerId);
+            console.log(`[MetricsMeters] Unregistered container: ${containerId}, active count: ${activeContainers.size}`);
+        }
+
+        // Only cleanup if no containers are using meters
+        if (activeContainers.size > 0) {
+            console.log(`[MetricsMeters] Skipping cleanup, ${activeContainers.size} container(s) still active`);
+            return;
+        }
+
+        console.log('[MetricsMeters] All containers closed, cleaning up WebSocket');
+        isMetersActive = false;
+
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+
+        // Stop KeepAlive interval
+        if (leaseInterval) {
+            clearInterval(leaseInterval);
+            leaseInterval = null;
+        }
+
+        // Unsubscribe from data before closing
+        if (mpxSocket && mpxSocket.readyState === WebSocket.OPEN) {
             try {
+                console.log('[MetricsMeters] Deactivating and unsubscribing from MPX data');
+                mpxSocket.send(JSON.stringify({
+                    type: "MPX_SUBSCRIBE",
+                    spectrum: false,
+                    active: false,
+                    clientId: METERS_CLIENT_ID
+                }));
+            } catch (e) {
+                console.error('[MetricsMeters] Failed to send unsubscribe:', e);
+            }
+        }
+
+        // Only close if we own this socket (not shared from analyzer)
+        if (mpxSocket && mpxSocket._metersHandler) {
+            mpxSocket.removeEventListener('message', mpxSocket._metersHandler);
+            delete mpxSocket._metersHandler;
+        }
+
+        // Check if analyzer is still using this socket
+        const analyzerActive = window.MetricsAnalyzer && typeof window.MetricsAnalyzer.isActive === 'function' && window.MetricsAnalyzer.isActive();
+
+        if (mpxSocket && !analyzerActive) {
+            try {
+                console.log('[MetricsMeters] Closing WebSocket, no other components active');
                 mpxSocket.close();
             } catch (e) {
                 console.error("[MetricsMeters] Error closing WebSocket:", e);
             }
-            mpxSocket = null;
+        } else if (mpxSocket) {
+            console.log('[MetricsMeters] Keeping WebSocket open, analyzer still active');
         }
+
+        mpxSocket = null;
     }
 
-    function initMeters(levelMeterContainer) {
+    function initMeters(levelMeterContainer, shouldSetupWebSocket = true) {
+        console.log(`[MetricsMeters] initMeters called, shouldSetupWebSocket=${shouldSetupWebSocket}`);
+
         if (window.MetricsMeters && typeof window.MetricsMeters.resetValues === "function") {
             window.MetricsMeters.resetValues();
         }
 
         const container = levelMeterContainer;
         if (!container) return;
+
+        // Register this container as active (reference counting)
+        const containerId = container.id || container;
+        activeContainers.add(containerId);
+        console.log(`[MetricsMeters] Registered container: ${containerId}, active count: ${activeContainers.size}`);
 
         container.innerHTML = "";
 
@@ -982,7 +1143,14 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
         updateMeter("mpx-meter", levels.mpxTotal || 0);
         updateMeter("rds-meter", levels.rds || 0);
 
-        setupMetricsWebSocket();
+        // Only setup WebSocket if this is being called for active meters
+        if (shouldSetupWebSocket) {
+            console.log('[MetricsMeters] Setting up WebSocket connection');
+            setupMetricsWebSocket();
+        } else {
+            console.log('[MetricsMeters] Skipping WebSocket setup, page load initialisation');
+        }
+
         setupAudioMeters();
         if (!stereoSetupIntervalId) {
             stereoSetupIntervalId = setInterval(setupAudioMeters, 3000);
@@ -1008,6 +1176,7 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
         initMeters,
         cleanup: closeMetricsWebSocket,
         createWebSocket: setupMetricsWebSocket,
+        getSharedSocket: () => mpxSocket,
 
         resetValues() {
             mpxDisplayValue = 0;

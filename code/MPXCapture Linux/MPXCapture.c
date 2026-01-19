@@ -61,6 +61,7 @@ int   G_SpectrumSendInterval = 30;
 // Options
 int   G_TruePeakFactor = 8;     // 4 or 8
 int   G_EnableMpxLpf   = 1;     // "MPX_LPF_100kHz" 0/1
+int   G_EnableOscilloscope = 1; // Set to 0 to disable oscilloscope
 
 #define BASE_PREAMP 3.0f
 
@@ -223,11 +224,15 @@ static void update_config(void) {
 
     G_EnableMpxLpf = get_json_int(string, "MPX_LPF_100kHz", G_EnableMpxLpf) ? 1 : 0;
 
+    // Read EnableOscilloscope option (default: 1)
+    G_EnableOscilloscope = get_json_int(string, "EnableOscilloscope", 1) ? 1 : 0;
+
     if (G_SpectrumAttack > 1.0f) G_SpectrumAttack = 1.0f; if (G_SpectrumAttack < 0.01f) G_SpectrumAttack = 0.01f;
     if (G_SpectrumDecay  > 1.0f) G_SpectrumDecay  = 1.0f; if (G_SpectrumDecay  < 0.01f) G_SpectrumDecay  = 0.01f;
 
     fprintf(stderr, "[MPX-C] Config Update (%s):\n", G_ConfigPath);
-    fprintf(stderr, "   MeterGain: %.2f dB | Tilt: %.1f us\n", G_MeterInputCalibrationDB, G_MPXTiltCalibrationUs);
+    fprintf(stderr, "   MeterGain: %.2f dB | Tilt: %.1f us | Oscilloscope: %s\n",
+            G_MeterInputCalibrationDB, G_MPXTiltCalibrationUs, G_EnableOscilloscope ? "ON" : "OFF");
 
     free(string);
 }
@@ -851,25 +856,27 @@ int main(int argc, char **argv)
             float vMeters = v * G_MeterGain;
             float vSpec   = v * G_SpectrumGain;
 
-            // --- 4. SCOPE CAPTURE (Parallel) ---
-            // Trigger Logic: Positive slope at zero crossing
-            if (!scopeTrigger) {
-                if (prevScopeSample < 0.0f && vMeters >= 0.0f) {
-                    scopeTrigger = 1;
-                    scopeIndex = 0;
+            // --- 4. SCOPE CAPTURE (Parallel) - only if enabled ---
+            if (G_EnableOscilloscope) {
+                // Trigger Logic: Positive slope at zero crossing
+                if (!scopeTrigger) {
+                    if (prevScopeSample < 0.0f && vMeters >= 0.0f) {
+                        scopeTrigger = 1;
+                        scopeIndex = 0;
+                    }
                 }
+
+                if (scopeTrigger && scopeIndex < 1024) {
+                    // No decimation for now to capture full detail, or adapt as needed
+                    scopeBuf[scopeIndex++] = vMeters;
+                }
+
+                // If buffer full, reset trigger
+                if (scopeIndex >= 1024) {
+                    scopeTrigger = 0;
+                }
+                prevScopeSample = vMeters;
             }
-            
-            if (scopeTrigger && scopeIndex < 1024) {
-                // No decimation for now to capture full detail, or adapt as needed
-                scopeBuf[scopeIndex++] = vMeters;
-            }
-            
-            // If buffer full, reset trigger
-            if (scopeIndex >= 1024) {
-                scopeTrigger = 0; 
-            }
-            prevScopeSample = vMeters;
 
             // --- 5. FFT BUFFERING (Parallel) ---
             if (fftIndex < fftSize) {
@@ -935,11 +942,13 @@ int main(int argc, char **argv)
                     
                     printf("],\"o\":[");
                     
-                    // --- OUTPUT OSCILLOSCOPE ---
-                    for (int k = 0; k < 1024; k++) {
-                        // Just raw value, JS will handle drawing
-                        printf("%.4f", scopeBuf[k]);
-                        if (k < 1023) printf(",");
+                    // --- OUTPUT OSCILLOSCOPE (only if enabled) ---
+                    if (G_EnableOscilloscope) {
+                        for (int k = 0; k < 1024; k++) {
+                            // Just raw value, JS will handle drawing
+                            printf("%.4f", scopeBuf[k]);
+                            if (k < 1023) printf(",");
+                        }
                     }
 
                     printf("],\"p\":%.4f,\"r\":%.4f,\"m\":%.4f,\"b\":%.4f}\n", smoothP, smoothR, mFinal, smoothB);

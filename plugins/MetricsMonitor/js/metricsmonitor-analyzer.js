@@ -40,8 +40,12 @@ const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is 
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
+const EnableOscilloscope = 1;    // Do not touch - this value is automatically updated via the config file
 const MeterTiltCalibration = -900;    // Do not touch - this value is automatically updated via the config file
-
+// ====================================================================================
+//  OSCILLOSCOPE FEATURE CONFIGURATION
+// ====================================================================================
+const ENABLE_OSCILLOSCOPE = EnableOscilloscope;
 // Default mode is Spectrum. Oscilloscope is optional.
 let isScopeMode = false;
 
@@ -54,29 +58,123 @@ const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
 const HOST = currentURL.hostname;
 const WS_URL = `${protocol}//${HOST}:${PORT}/data_plugins`;
 
+const listeners = new Set();
+
+// Generate unique client ID for subscription tracking
+const CLIENT_ID = 'analyzer_' + Math.random().toString(36).substr(2, 9);
+
 let ws = null;
 let wsCleaned = false;
+let leaseInterval = null; // KeepAlive
+const KEEP_ALIVE_INTERVAL = 10000;
+
+function sendKeepAlive(clientId) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const needsSpectrum = listeners.size > 0;
+  const needsScope = listeners.size > 0 && isScopeMode;
+
+  ws.send(JSON.stringify({
+    type: "MPX_SUBSCRIBE",
+    spectrum: needsSpectrum,
+    scope: needsScope,
+    active: needsSpectrum,
+    clientId: clientId
+  }));
+
+  console.log(
+    `[MetricsAnalyzer] KeepAlive: spectrum=${needsSpectrum}, scope=${needsScope}, listeners=${listeners.size}`
+  );
+}
 
 const MpxHub = (() => {
   let reconnectTimer = null;
-  const listeners = new Set();
 
   function connect() {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    // Check if already a WebSocket
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      console.log('[MetricsAnalyzer] WebSocket already connected, skipping');
+      return;
+    }
+
+    // Check if meters already has a WebSocket to share
+    if (window.MetricsMeters && typeof window.MetricsMeters.getSharedSocket === 'function') {
+      const metersSocket = window.MetricsMeters.getSharedSocket();
+      if (metersSocket && (metersSocket.readyState === WebSocket.OPEN || metersSocket.readyState === WebSocket.CONNECTING)) {
+        console.log('[MetricsAnalyzer] Sharing WebSocket from meters');
+        ws = metersSocket;
+        wsCleaned = false;
+
+        // Attach message handler without replacing meters handler
+        if (!ws._analyzerHandler) {
+          const handler = (evt) => {
+            let msg;
+            try { msg = JSON.parse(evt.data); } catch { return; }
+            if (!msg || typeof msg !== "object" || msg.type !== "MPX") return;
+
+            // Pass the entire message to access 'value' and 'scope'
+            listeners.forEach(fn => {
+              try { fn(msg); } catch (e) { /* ignore */ }
+            });
+          };
+          ws._analyzerHandler = handler;
+          ws.addEventListener('message', handler);
+          console.log('[MetricsAnalyzer] Attached message handler to shared socket');
+        }
+
+        // Send subscription if socket is open
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            sendKeepAlive(CLIENT_ID);
+            if (!leaseInterval) {
+              leaseInterval = setInterval(() => {
+                sendKeepAlive(CLIENT_ID);
+              }, KEEP_ALIVE_INTERVAL);
+            }
+            console.log('[MetricsAnalyzer] Sent subscription on shared socket');
+          } catch (e) {
+            console.error('[MetricsAnalyzer] Failed to send subscription:', e);
+          }
+        }
+        return;
+      }
+    }
+
+    wsCleaned = false;
+
     try {
+      console.log('[MetricsAnalyzer] Creating new WebSocket connection');
       ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        console.log('[MetricsAnalyzer] WebSocket opened, sending subscription');
+        try {
+          sendKeepAlive(CLIENT_ID);
+          if (!leaseInterval) {
+            leaseInterval = setInterval(() => {
+              sendKeepAlive(CLIENT_ID); // Should probably only be sent if MPX Spectrum is active
+            }, 10000);
+          }
+        } catch (e) {
+          console.error('[MetricsAnalyzer] Failed to send subscription:', e);
+        }
+      };
+
       ws.onmessage = (evt) => {
         let msg;
         try { msg = JSON.parse(evt.data); } catch { return; }
         if (!msg || typeof msg !== "object" || msg.type !== "MPX") return;
-        
+
         // Pass the entire message so we can access 'value' AND 'scope'
         listeners.forEach(fn => {
           try { fn(msg); } catch (e) { /* ignore */ }
         });
       };
-      ws.onclose = () => scheduleReconnect();
-      ws.onerror = () => scheduleReconnect();
+
+      ws.addEventListener('close', scheduleReconnect);
+      ws.addEventListener('error', () => {
+        // error is informational; close will handle reconnect
+      });
     } catch {
       scheduleReconnect();
     }
@@ -84,8 +182,14 @@ const MpxHub = (() => {
 
   function scheduleReconnect() {
     if (wsCleaned) {
+        // return only if mode has changed to prevent reconnect timer from running
         ws = null;
         wsCleaned = false;
+        return;
+    }
+    if (listeners.size === 0) {
+        // Don't reconnect if no listeners
+        console.log('[MetricsAnalyzer] No listeners, skipping reconnect');
         return;
     }
     if (reconnectTimer) return;
@@ -98,22 +202,96 @@ const MpxHub = (() => {
   function subscribe(fn) {
     if (typeof fn !== "function") return () => {};
     listeners.add(fn);
+    console.log(`[MetricsAnalyzer] MpxHub.subscribe() - listeners: ${listeners.size}`);
+    sendKeepAlive(CLIENT_ID); // KeepAlive, instant on MPX Spectrum open
     connect();
-    return () => listeners.delete(fn);
+    return () => {
+      listeners.delete(fn);
+      console.log(`[MetricsAnalyzer] MpxHub.unsubscribe() - listeners: ${listeners.size}`);
+      // Immediately notify server that spectrum may no longer be needed
+      sendKeepAlive(CLIENT_ID);
+    };
   }
 
-  return { subscribe, connect };
+  function getSocket() {
+    return ws;
+  }
+
+  function hasActiveListeners() {
+    return listeners.size > 0;
+  }
+
+  return { subscribe, connect, getSocket, hasActiveListeners };
 })();
 
 function closeMpxSocket() {
-  if (ws) {
-    try {
-      ws.close();
+  if (!ws) return;
+
+  try {
+    console.log('[MetricsAnalyzer] Closing WebSocket');
+
+    // Stop KeepAlive
+    clearInterval(leaseInterval);
+    leaseInterval = null;
+
+    // Check if this is a shared socket from meters
+    const isSharedSocket =
+      window.MetricsMeters &&
+      typeof window.MetricsMeters.getSharedSocket === 'function' &&
+      window.MetricsMeters.getSharedSocket() === ws;
+
+    if (isSharedSocket) {
+      console.log('[MetricsAnalyzer] This is a shared socket, only sending unsubscribe, not closing');
+
+      // Just send unsubscribe, don't close the socket
+      ws.send(JSON.stringify({
+        type: "MPX_SUBSCRIBE",
+        spectrum: false,
+        active: false,
+        clientId: CLIENT_ID
+      }));
+
+      // Remove our message handler
+      if (ws._analyzerHandler) {
+        ws.removeEventListener('message', ws._analyzerHandler);
+        delete ws._analyzerHandler;
+        console.log('[MetricsAnalyzer] Removed message handler from shared socket');
+      }
+
+      ws = null;
       wsCleaned = true;
-    } catch (e) {
-      console.error("[MetricsMeters] Error closing WebSocket:", e);
+
+    } else {
+      console.log('[MetricsAnalyzer] This is our own socket - closing it');
+
+      // Send unsubscribe
+      ws.send(JSON.stringify({
+        type: "MPX_SUBSCRIBE",
+        spectrum: false,
+        active: false,
+        clientId: CLIENT_ID
+      }));
+
+      const wsToClose = ws;
+      ws = null;
+      wsCleaned = true;
+
+      setTimeout(() => {
+        if (wsToClose && wsToClose.readyState !== WebSocket.CLOSED) {
+          wsToClose.close();
+        }
+      }, 100);
     }
+
+  } catch (e) {
+    console.error("[MetricsAnalyzer] Error closing WebSocket:", e);
+
     ws = null;
+    wsCleaned = true;
+
+    // Stop KeepAlive
+    clearInterval(leaseInterval);
+    leaseInterval = null;
   }
 }
 
@@ -183,7 +361,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   // --- CLICKABLE MODE LABEL (Bottom Left) ---
   const modeLabel = document.createElement("div");
   modeLabel.id = `mpx-mode-label-${instanceKey}`;
-  modeLabel.title = "Click to toggle between Spectrum and Oscilloscope view"; 
+  modeLabel.title = ENABLE_OSCILLOSCOPE ? "Click to toggle between Spectrum and Oscilloscope view" : "Spectrum view";
   modeLabel.style.cssText = `
     position: absolute;
     bottom: 10px;
@@ -191,7 +369,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
     color: rgba(255, 255, 255, 0.85);
     font-family: Arial, sans-serif;
     font-size: 12px;
-    cursor: pointer;
+    cursor: ${ENABLE_OSCILLOSCOPE ? 'pointer' : 'default'};
     z-index: 50;
     user-select: none;
     transition: color 0.2s;
@@ -199,7 +377,7 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
 
   // Function to update label text and color
   function updateModeLabel() {
-      if (isScopeMode) {
+      if (ENABLE_OSCILLOSCOPE && isScopeMode) {
           modeLabel.innerText = "Oscilloscope";
       } else {
           modeLabel.innerText = sampleRate === 48000 ? "FM Audio Spectrum"
@@ -213,18 +391,20 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
   // Initial update
   updateModeLabel();
 
-  modeLabel.onmouseenter = () => { modeLabel.style.textDecoration = "underline"; };
-  modeLabel.onmouseleave = () => { modeLabel.style.textDecoration = "none"; };
+  if (ENABLE_OSCILLOSCOPE) {
+      modeLabel.onmouseenter = () => { modeLabel.style.textDecoration = "underline"; };
+      modeLabel.onmouseleave = () => { modeLabel.style.textDecoration = "none"; };
 
-  // --- EVENT SYNCHRONIZATION ---
-  modeLabel.onclick = (e) => {
-      e.stopPropagation();
-      const newMode = !isScopeMode; // Toggle logic based on current state
-      
-      // Dispatch custom event
-      const event = new CustomEvent('mm-analyzer-mode-change', { detail: { scopeMode: newMode } });
-      window.dispatchEvent(event);
-  };
+      // --- EVENT SYNCHRONIZATION ---
+      modeLabel.onclick = (e) => {
+          e.stopPropagation();
+          const newMode = !isScopeMode; // Toggle logic based on current state
+
+          // Dispatch custom event
+          const event = new CustomEvent('mm-analyzer-mode-change', { detail: { scopeMode: newMode } });
+          window.dispatchEvent(event);
+      };
+  }
   
   block.appendChild(modeLabel);
 
@@ -1170,10 +1350,13 @@ function createAnalyzerInstance(containerId = "level-meter-container", options =
       // Sync local state
       isScopeMode = e.detail.scopeMode;
       localStorage.setItem("mm_analyzer_mode", isScopeMode ? "scope" : "spec");
-      
+
+      // Immediately notify server of mode change to fix oscilloscope toggle delay
+      sendKeepAlive(CLIENT_ID);
+
       // Update this instance
       updateModeLabel();
-      initViewParams(); 
+      initViewParams();
       drawMpxSpectrum();
   }
   
@@ -1269,5 +1452,7 @@ window.MetricsAnalyzer.init = init;
 window.MetricsAnalyzer.zoomReset = zoomReset;
 window.MetricsAnalyzer.resize = resize;
 window.MetricsAnalyzer.destroy = destroy;
+window.MetricsAnalyzer.getSharedSocket = () => MpxHub.getSocket();
+window.MetricsAnalyzer.isActive = () => MpxHub.hasActiveListeners();
 
 })();
