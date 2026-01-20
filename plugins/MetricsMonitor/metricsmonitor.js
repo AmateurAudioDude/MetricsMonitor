@@ -1801,13 +1801,12 @@ ensureTextSocket().then(() => {
       console.log('[MM] Canvas not visible on page load, deferring combo analyzer initialization');
     }
 
-    // --- 2. Meters Init (Lazy - only when canvas is visible) ---
+    // --- 2. Meters Init ---
     window.mmInitComboMeters = function() {
       if (window.MetricsMeters && window.MetricsMeters.initMeters) {
         setTimeout(() => {
-          console.log('[MM] Initializing combo meters (lazy init)');
-          // Pass true to allow WebSocket setup - meters will reuse analyzer's WebSocket
-          // via getSharedSocket() if analyzer is already initialized
+          console.log('[MM] Initializing combo meters');
+
           window.MetricsMeters.initMeters(metersContainer, true);
           if (window.MetricsMeters.startAnimation) window.MetricsMeters.startAnimation();
 
@@ -1829,13 +1828,8 @@ ensureTextSocket().then(() => {
       }
     };
 
-    // Only initialise if canvas is already visible on page load
-    if (isCanvasVisible && activeCanvasMode === 2) {
-      console.log('[MM] Canvas visible on page load, initializing combo meters immediately');
-      window.mmInitComboMeters();
-    } else {
-      console.log('[MM] Canvas not visible on page load, deferring combo meters initialization');
-    }
+    // Always initialise on page load, required for audio meter modules
+    window.mmInitComboMeters();
   }
   
   function autoEnableSpectrumWhenReady() {
