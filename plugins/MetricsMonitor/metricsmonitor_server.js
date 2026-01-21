@@ -1283,6 +1283,7 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
 
       const clientId = msg.clientId || 'unknown';
       const now = Date.now();
+      const hadClients = activeClients.size > 0;
 
       // Refresh lastSeen on any MPX_SUBSCRIBE
       lastSeen.set(clientId, now);
@@ -1318,6 +1319,67 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
       needsSpectrum = spectrumSubscribers.size > 0;
       needsScope = scopeSubscribers.size > 0;
       //logInfo(`[MPX] Active clients: ${activeClients.size}, Spectrum: ${spectrumSubscribers.size}, Scope: ${scopeSubscribers.size}`);
+
+      // ---- Start/Stop MPXCapture on demand ----
+      const needsData = activeClients.size > 0; // Any active client needs MPX data
+
+      // Helper function to cancel shutdown with debounced logging
+      const cancelShutdownIfNeeded = () => {
+        if (shutdownTimer) {
+          clearTimeout(shutdownTimer);
+          shutdownTimer = null;
+          // Only log if shutdown was actually scheduled
+          if (shutdownScheduled) {
+            const now = Date.now();
+            const timeSinceLastCancel = now - lastShutdownCancelTime;
+            if (timeSinceLastCancel > SHUTDOWN_CANCEL_DEBOUNCE) {
+              logInfo("[MPX] Client requested data, cancelling shutdown.");
+              lastShutdownCancelTime = now;
+            }
+          }
+          shutdownScheduled = false;
+          return true; // Shutdown was cancelled
+        }
+        return false; // No shutdown to cancel
+      };
+
+      if (needsData && !mpxCaptureRunning) {
+        // First client requesting data, start MPXCapture
+        const wasCancelled = cancelShutdownIfNeeded();
+        // Don't start if a reconnect is already scheduled
+        if (!retryTimeout) {
+          if (!wasCancelled) {
+            logInfo("[MPX] Client requesting MPX data, starting MPXCapture...");
+          }
+          startMPXCapture();
+        }
+      } else if (!needsData && mpxCaptureRunning) {
+        // No more clients need data, schedule shutdown with debounce
+        if (!shutdownTimer) {
+          // Add silent debounce before scheduling shutdown
+          shutdownTimer = setTimeout(() => {
+            // Double-check after debounce period
+            if (activeClients.size === 0) {
+              logInfo(`[MPX] No clients need data, scheduling shutdown in ${IDLE_SHUTDOWN_DELAY / 1000} seconds...`);
+              shutdownScheduled = true; // Mark that shutdown has been scheduled
+              shutdownTimer = setTimeout(() => {
+                if (activeClients.size === 0) {
+                  stopMPXCapture();
+                }
+                shutdownTimer = null;
+                shutdownScheduled = false;
+              }, IDLE_SHUTDOWN_DELAY);
+            } else {
+              // Client reconnected during debounce, cancel silently
+              shutdownTimer = null;
+              shutdownScheduled = false;
+            }
+          }, IDLE_SHUTDOWN_DEBOUNCE); // debounce
+        }
+      } else if (needsData && shutdownTimer) {
+        // Client requested data before shutdown, cancel shutdown with debounce
+        cancelShutdownIfNeeded();
+      }
     });
   }
 
@@ -1331,6 +1393,7 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
     leaseInterval = setInterval(() => {
       const now = Date.now();
       let changed = false;
+      const hadActiveClients = activeClients.size > 0;
 
       for (const [clientId, ts] of lastSeen.entries()) {
         if (now - ts > LEASE_MS) {
@@ -1348,6 +1411,19 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
         needsSpectrum = spectrumSubscribers.size > 0;
         needsScope = scopeSubscribers.size > 0;
         //logInfo(`[MPX] Active clients: ${activeClients.size}, Spectrum: ${spectrumSubscribers.size}, Scope: ${scopeSubscribers.size}`);
+
+        // Check need to shutdown MPXCapture when all active clients expire
+        const hasActiveClients = activeClients.size > 0;
+        if (!hasActiveClients && hadActiveClients && mpxCaptureRunning) {
+          logInfo(`[MPX] All clients expired, scheduling shutdown in ${IDLE_SHUTDOWN_DELAY / 1000} seconds...`);
+          if (shutdownTimer) clearTimeout(shutdownTimer);
+          shutdownTimer = setTimeout(() => {
+            if (activeClients.size === 0) {
+              stopMPXCapture();
+            }
+            shutdownTimer = null;
+          }, IDLE_SHUTDOWN_DELAY);
+        }
       }
     }, 2000);
   }
@@ -1419,6 +1495,18 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
   const RECONNECT_MAX_RETRIES = 30;
   const RECONNECT_RETRY_DELAY = 15;
 
+  /* ============================
+     IDLE SHUTDOWN STATE
+     ============================ */
+  let shutdownTimer = null;
+  let shutdownScheduled = false; // Track if shutdown has been scheduled
+  let mpxCaptureRunning = false;
+  let intentionalShutdown = false; // Flag to prevent reconnect on intentional shutdown
+  let lastShutdownCancelTime = 0; // Track last time shutdown was cancelled to prevent log spam
+  const IDLE_SHUTDOWN_DEBOUNCE = 10000; // Silent debounce before scheduling shutdown
+  const IDLE_SHUTDOWN_DELAY = 5000; // Grace period before shutdown, total = debounce + delay
+  const SHUTDOWN_CANCEL_DEBOUNCE = 1000; // Debounce for cancellation messages
+
   function attemptReconnect() {
       if (retryAttempts >= RECONNECT_MAX_RETRIES) {
           logError("[MPX] Maximum retry attempts reached. MPXCapture will not restart.");
@@ -1443,20 +1531,71 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
       }, RECONNECT_RETRY_DELAY * 1000);
   }
 
+  function stopMPXCapture() {
+      if (!rec || !mpxCaptureRunning) return;
+
+      logInfo("[MPX] Stopping MPXCapture, no active clients...");
+
+      // Set flag to prevent reconnect attempt
+      intentionalShutdown = true;
+
+      try {
+          // Kill the entire process group to ensure arecord is also terminated
+          // This is critical on Linux where spawn bash -> arecord -> MPXCapture
+          if (rec.pid) {
+              try {
+                  // Try to kill the process group (negative PID)
+                  process.kill(-rec.pid, 'SIGTERM');
+                  logInfo("[MPX] Sent SIGTERM to process group " + rec.pid);
+              } catch (e) {
+                  // Fallback to killing just the main process
+                  rec.kill('SIGTERM');
+                  logInfo("[MPX] Sent SIGTERM to process " + rec.pid);
+              }
+          } else {
+              rec.kill('SIGTERM');
+          }
+      } catch (e) {
+          logWarn("[MPX] Error stopping MPXCapture:", e.message);
+      }
+
+      rec = null;
+      mpxCaptureRunning = false;
+      retryAttempts = 0; // Reset retry counter when manually stopped
+
+      // Clear any pending reconnect timers
+      if (retryTimeout) {
+          clearTimeout(retryTimeout);
+          retryTimeout = null;
+      }
+      if (resetTimeout) {
+          clearTimeout(resetTimeout);
+          resetTimeout = null;
+      }
+  }
+
   function startMPXCapture() {
+      // Don't start if already running
+      if (mpxCaptureRunning && rec) {
+          logInfo("[MPX] MPXCapture already running, skipping start.");
+          return;
+      }
+
+      // Clear intentional shutdown flag when starting
+      intentionalShutdown = false;
 
       logInfo(`[MPX] Attempt #${retryAttempts + 1} to start MPXCapture...`);
 
       if (MPX_MODE === "off" && MPX_INPUT_CARD === "") {
           logInfo("[MPX] Mode is 'off' -> MPX Capture Disabled.");
           return;
-      } 
+      }
       else {
           // Determine Input Device
           if (MPX_INPUT_CARD && MPX_INPUT_CARD !== "") {
               targetDevice = MPX_INPUT_CARD;
               logInfo(`[MPX] Using device from plugin config: "${targetDevice}"`);
-          } 
+          }
           else {
               // If no specific MPXInputCard is set, ALWAYS fallback to main config
               if (mainConfig && mainConfig.audio && mainConfig.audio.audioDevice && mainConfig.audio.audioDevice !== "") {
@@ -1528,7 +1667,8 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
     -t raw -q \
     | "${MPX_EXE_PATH}" ${SAMPLE_RATE} "Default" ${FFT_SIZE} "${escapedConfigPath}"
     `], {
-            stdio: ["ignore", "pipe", "pipe"]
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: true  // Create a new process group so we can kill the entire pipeline
             });
         }
 
@@ -1547,13 +1687,30 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
 
         rec.on("close", (code) => {
             logInfo("[MPX] MPXCapture exited with code:", code);
-            attemptReconnect();
+            mpxCaptureRunning = false;
+            rec = null;
+
+            // Don't reconnect if this was an intentional shutdown
+            if (intentionalShutdown) {
+                logInfo("[MPX] MPXCapture intentional shutdown");
+                intentionalShutdown = false; // Reset flag
+                return;
+            }
+
+            // Only attempt reconnect if active clients
+            if (activeClients.size > 0) {
+                attemptReconnect();
+            } else {
+                logInfo("[MPX] Not restarting MPXCapture, no active clients");
+            }
         });
+
+        mpxCaptureRunning = true;
     }
   }
 
-  // Initial start
-  startMPXCapture();
+  // Don't start MPXCapture immediately, wait for first client
+  // startMPXCapture(); // No need to start here, now starts on-demand
 
 // ====================================================================================
 //  MAIN BROADCAST LOOP (V2.5 - Dynamic Scaling)
@@ -1568,9 +1725,14 @@ if (typeof global.mpxPeakState === 'undefined') {
 }
 
 setInterval(() => {
+    // 0. Skip all processing if no active clients
+    if (activeClients.size === 0) {
+      return; // Exit early, no clients need data
+    }
+
     // 1. Check WebSocket connection
     if (!dataPluginsWs || dataPluginsWs.readyState !== WebSocket.OPEN) return;
-    
+
     // 2. Check Backpressure
     if (dataPluginsWs.bufferedAmount > MAX_WS_BACKLOG_BYTES) {
         if (++backpressureHits >= MAX_BACKPRESSURE_HITS) {
@@ -1660,12 +1822,6 @@ setInterval(() => {
     // -----------------------------------------------------------------------
     // SEND TO CLIENT
     // -----------------------------------------------------------------------
-    // Only send data if there are active clients
-    // This prevents unnecessary bandwidth usage when no one is listening
-    if (activeClients.size === 0) {
-      return; // Skip sending if no active clients
-    }
-
     // Send both Spectrum (value) and Scope (scope) arrays
     // Only include spectrum/scope if clients need it (bandwidth optimisation)
     let finalSpectrum = [];

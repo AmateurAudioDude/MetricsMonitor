@@ -1072,8 +1072,8 @@ ensureTextSocket().then(() => {
           window.mmInitComboAnalyzer();
         }
         if (window.mmInitComboMeters && typeof window.mmInitComboMeters === 'function') {
-          console.log('[MM] Calling mmInitComboMeters');
-          window.mmInitComboMeters();
+          console.log('[MM] Calling mmInitComboMeters with WebSocket setup');
+          window.mmInitComboMeters(true); // Setup WebSocket for client displaying meters
         }
       } else if (activeCanvasMode === 4) {
         replaceMainCanvasIfRequired(); // will append/show
@@ -1112,8 +1112,8 @@ ensureTextSocket().then(() => {
 
         // Cleanup combo meters
         if (window.MetricsMeters?.cleanup) {
-          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-container');
-          window.MetricsMeters.cleanup('mm-combo-meters-container');
+          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-inner');
+          window.MetricsMeters.cleanup('mm-combo-meters-inner');
         }
 
         // Clear combo meters container
@@ -1251,8 +1251,8 @@ ensureTextSocket().then(() => {
         }
         // Cleanup combo meters
         if (window.MetricsMeters?.cleanup) {
-          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-container');
-          window.MetricsMeters.cleanup('mm-combo-meters-container');
+          console.log('[MM] Calling MetricsMeters.cleanup() for mm-combo-meters-inner');
+          window.MetricsMeters.cleanup('mm-combo-meters-inner');
         }
         // Clear combo meters container
         const comboMetersContainer = document.getElementById("mm-combo-meters-container");
@@ -1289,8 +1289,8 @@ ensureTextSocket().then(() => {
           window.mmInitComboAnalyzer();
         }
         if (window.mmInitComboMeters && typeof window.mmInitComboMeters === 'function') {
-          console.log('[MM] Reinitializing combo meters after mode switch');
-          window.mmInitComboMeters();
+          console.log('[MM] Reinitializing combo meters after mode switch with WebSocket setup');
+          window.mmInitComboMeters(true); // Setup WebSocket for client displaying meters
         }
       }
 
@@ -1802,12 +1802,12 @@ ensureTextSocket().then(() => {
     }
 
     // --- 2. Meters Init ---
-    window.mmInitComboMeters = function() {
+    window.mmInitComboMeters = function(shouldSetupWebSocket = false) {
       if (window.MetricsMeters && window.MetricsMeters.initMeters) {
         setTimeout(() => {
-          console.log('[MM] Initializing combo meters');
+          console.log('[MM] Initializing combo meters, shouldSetupWebSocket=' + shouldSetupWebSocket);
 
-          window.MetricsMeters.initMeters(metersContainer, true);
+          window.MetricsMeters.initMeters(metersContainer, shouldSetupWebSocket);
           if (window.MetricsMeters.startAnimation) window.MetricsMeters.startAnimation();
 
         const COMBO_PREFIX = "mm-combo-";

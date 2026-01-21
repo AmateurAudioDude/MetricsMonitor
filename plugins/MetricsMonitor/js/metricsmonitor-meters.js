@@ -1094,10 +1094,14 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
         const container = levelMeterContainer;
         if (!container) return;
 
-        // Register this container as active (reference counting)
-        const containerId = container.id || container;
-        activeContainers.add(containerId);
-        console.log(`[MetricsMeters] Registered container: ${containerId}, active count: ${activeContainers.size}`);
+        // Register this container as active, only if setting up WebSocket
+        if (shouldSetupWebSocket) {
+            const containerId = container.id || container;
+            activeContainers.add(containerId);
+            console.log(`[MetricsMeters] Registered container: ${containerId}, active count: ${activeContainers.size}`);
+        } else {
+            console.log(`[MetricsMeters] Skipping container registration (no WebSocket setup)`);
+        }
 
         container.innerHTML = "";
 
