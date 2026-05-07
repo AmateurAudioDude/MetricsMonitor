@@ -48,7 +48,7 @@ https://github.com/Highpoint2000/MetricsMonitor/raw/refs/heads/main/firmware/TEF
    - MeterRDSScale: Adjust this up/down (100/50er steps)until you reach approximately 2.0 kHz.	
    
    Now you can use the calibration tool to calculate the exact scale values ​​so that the calibration values ​​remain at 0 (Step 3 - Fine-tuning is therefore omitted!):
-   https://tef.noobish.eu/logos/MetricsMonitorCalibrationTool.html  
+   https://highpoint.fmdx.org/webtools/MetricsMonitorCalibrationTool.html  
    
 3. Alternatively: Manual fine-tuning:
 
