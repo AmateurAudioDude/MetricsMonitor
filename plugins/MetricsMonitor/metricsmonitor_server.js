@@ -101,7 +101,10 @@ const defaultConfig = {
   MeterColorWarning: "rgb(255, 255,0)", // RGB Array (Yellow)
   MeterColorDanger: "rgb(255, 0, 0)",   // RGB Array (Red)
   PeakMode: "dynamic",                  // "dynamic" or "fixed"
-  PeakColorFixed: "rgb(251, 174, 38)"   // RGB Color for fixed peak
+  PeakColorFixed: "rgb(251, 174, 38)",  // RGB Color for fixed peak
+
+  // 9. Process Management
+  IdleShutdown: false  // Stop MPXCapture when idle (no meters/spectrum/scope open). false = keep running.
 };
 
 /**
@@ -242,6 +245,7 @@ function normalizePluginConfig(json) {
     MeterColorDanger: typeof json.MeterColorDanger !== "undefined" ? json.MeterColorDanger : defaultConfig.MeterColorDanger,
     PeakMode: typeof json.PeakMode !== "undefined" ? json.PeakMode : defaultConfig.PeakMode,
     PeakColorFixed: typeof json.PeakColorFixed !== "undefined" ? json.PeakColorFixed : defaultConfig.PeakColorFixed,
+    IdleShutdown: typeof json.IdleShutdown !== "undefined" ? json.IdleShutdown : defaultConfig.IdleShutdown,
   };
 
   // Preserve any extra custom keys
@@ -364,6 +368,7 @@ let LOCK_VOLUME_SLIDER;
 let ENABLE_SPECTRUM_ON_LOAD;
 let ENABLE_ANALYZER_ADMIN_MODE;
 let MPX_TILT_CALIBRATION;
+let IDLE_SHUTDOWN = false;
 let VISUAL_DELAY_MS; 
 
 // Calibrations
@@ -456,6 +461,7 @@ function applyConfig(newConfig) {
     METER_COLOR_DANGER = JSON.stringify(configPlugin.MeterColorDanger || "rgb(255, 0, 0)");
     PEAK_MODE = String(configPlugin.PeakMode || "dynamic");
     PEAK_COLOR_FIXED = String(configPlugin.PeakColorFixed || "rgb(251, 174, 38)");
+    IDLE_SHUTDOWN = configPlugin.IdleShutdown === true;
     
     // Update feature toggles
     isModule2Active = sequenceContainsId(MODULE_SEQUENCE, 2) || sequenceContainsId(CANVAS_SEQUENCE, 2);
@@ -1280,12 +1286,17 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
   let backpressureHits = 0;
   const MAX_BACKPRESSURE_HITS = 200;
   
-  // Heartbeat tracking for Spectrum & Scope Calculation
+  // Heartbeat tracking for Spectrum, Scope & Meters
   let lastSpectrumHeartbeat = 0;
   let spectrumIsActive = false;
   let lastScopeHeartbeat = 0;
   let scopeIsActive = false;
   let lastScopeState = false;
+  let lastMetersHeartbeat = 0;
+
+  // Idle shutdown state
+  let intentionalShutdown = false;
+  let shutdownTimer = null;
   
 
   function connectDataPluginsWs() {
@@ -1335,6 +1346,8 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
                 lastSpectrumHeartbeat = Date.now();
             } else if (str.includes('"scope_heartbeat"')) {
                 lastScopeHeartbeat = Date.now();
+            } else if (str.includes('"meters_heartbeat"')) {
+                lastMetersHeartbeat = Date.now();
             }
         } catch(e) {}
     });
@@ -1427,6 +1440,23 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
       }, RECONNECT_RETRY_DELAY * 1000);
   }
 
+  function stopMPXCapture() {
+      if (!rec) return;
+      logInfo("[MPX] Stopping MPXCapture (idle shutdown)...");
+      intentionalShutdown = true;
+      try {
+          if (osPlatform !== "win32") {
+              // Kill the entire process group (bash + arecord + MPXCapture)
+              process.kill(-rec.pid, 'SIGTERM');
+          } else {
+              rec.kill('SIGTERM');
+          }
+      } catch (e) {
+          logWarn("[MPX] Error stopping MPXCapture:", e.message);
+          try { rec.kill('SIGTERM'); } catch (_) {}
+      }
+  }
+
   function startMPXCapture() {
 
       logInfo(`[MPX] Attempt #${retryAttempts + 1} to start MPXCapture...`);
@@ -1499,6 +1529,7 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
               ${SAMPLE_RATE} "s32" ${FFT_SIZE} "${escapedConfigPath}" ${UDP_CONTROL_PORT}
           `], {
             stdio: ["ignore", "pipe", "pipe"],
+            detached: true,  // Makes bash a process group leader so SIGTERM kills the whole pipeline
             env: { ...process.env, ALSA_CARD: "sndrpihifiberry" }
           });
 
@@ -1516,14 +1547,24 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
 
         rec.on("close", (code) => {
             logInfo("[MPX] MPXCapture exited with code:", code);
-            if (rec && rec.rl) rec.rl.close(); // Clean up readline memory
-            attemptReconnect();
+            if (rec && rec.rl) rec.rl.close();
+            rec = null;
+            if (intentionalShutdown) {
+                intentionalShutdown = false;
+                logInfo("[MPX] MPXCapture stopped (idle shutdown).");
+            } else {
+                attemptReconnect();
+            }
         });
     }
   }
 
-  // Initial start
-  startMPXCapture();
+  // Initial start — skip if IdleShutdown is enabled; binary starts on first client heartbeat
+  if (!IDLE_SHUTDOWN) {
+      startMPXCapture();
+  } else {
+      logInfo("[MPX] IdleShutdown enabled - waiting for client activity before starting MPXCapture.");
+  }
 
   // ====================================================================================
   //  Spectrum Activity Watchdog (Optimized CPU) - UDP VERSION
@@ -1547,7 +1588,39 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
 
      const scopeCmd = isScopeActive ? "SCOPE=1" : "SCOPE=0";
      udpClient.send(Buffer.from(scopeCmd), UDP_CONTROL_PORT, '127.0.0.1', () => {});
-     
+
+     // Idle shutdown / restart-on-demand
+     if (IDLE_SHUTDOWN) {
+         const metersActive = (now - lastMetersHeartbeat < 5000);
+         const anyActive = isSpectrumActive || isScopeActive || metersActive;
+
+         if (anyActive) {
+             // Cancel any pending shutdown
+             if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
+             // Restart binary if it was stopped by idle shutdown and is needed again
+             if (!rec && !intentionalShutdown) {
+                 logInfo("[MPX] Client reconnected, restarting MPXCapture...");
+                 retryAttempts = 0;
+                 startMPXCapture();
+             }
+         } else if (rec && !intentionalShutdown) {
+             // Nothing active — schedule shutdown after debounce
+             if (!shutdownTimer) {
+                 shutdownTimer = setTimeout(() => {
+                     shutdownTimer = null;
+                     const n = Date.now();
+                     const stillIdle = (n - lastSpectrumHeartbeat >= 5000) &&
+                                       (n - lastScopeHeartbeat >= 5000) &&
+                                       (n - lastMetersHeartbeat >= 5000);
+                     if (stillIdle && rec) {
+                         logInfo("[MPX] All clients idle, stopping MPXCapture...");
+                         stopMPXCapture();
+                     }
+                 }, 10000);
+             }
+         }
+     }
+
   }, 1000);
 
   // ====================================================================================
@@ -1671,20 +1744,27 @@ if (!ENABLE_MPX && MPX_INPUT_CARD === ""){
       // -----------------------------------------------------------------------
       // Send both Spectrum (value) and Scope (scope) arrays
       // Note: These might be empty arrays if spectrumIsActive is false
-      let finalSpectrum = (latestMpxFrame && latestMpxFrame.length > 0) ? latestMpxFrame : [];
-      let finalScope = (latestScopeFrame && latestScopeFrame.length > 0) ? latestScopeFrame : [];
+      let finalSpectrum = [];
+      if (spectrumIsActive && latestMpxFrame && latestMpxFrame.length > 0) {
+          finalSpectrum = latestMpxFrame.map(v => parseFloat(v.toFixed(4)));
+      }
+
+      let finalScope = [];
+      if (scopeIsActive && latestScopeFrame && latestScopeFrame.length > 0) {
+          finalScope = latestScopeFrame.map(v => parseFloat(v.toFixed(4)));
+      }
 
       const payload = JSON.stringify({
-        type: "MPX", 
+        type: "MPX",
         value: finalSpectrum, // 's' data from C#
         scope: finalScope,    // 'o' data from C#
-        peak: out_mpx, 
-        pilotKHz: out_pilot, 
-        rdsKHz: out_rds,
-        pilot: valP, 
-        rds: valR, 
-        noise: valN, 
-        snr: (valN > 1e-6) ? (valP / valN) : 0
+        peak: parseFloat(out_mpx.toFixed(4)),
+        pilotKHz: parseFloat(out_pilot.toFixed(4)),
+        rdsKHz: parseFloat(out_rds.toFixed(4)),
+        pilot: parseFloat(valP.toFixed(4)),
+        rds: parseFloat(valR.toFixed(4)),
+        noise: parseFloat(valN.toFixed(4)),
+        snr: (valN > 1e-6) ? parseFloat((valP / valN).toFixed(4)) : 0
       });
 
       // -----------------------------------------------------------------------
