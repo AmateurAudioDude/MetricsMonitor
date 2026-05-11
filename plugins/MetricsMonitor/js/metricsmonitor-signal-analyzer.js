@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  metricsmonitor-signal-analyzer.js               (V2.8)   //
+//  metricsmonitor-signal-analyzer.js               (V2.8a)  //
 //                                                           //
-//  by Highpoint               last update: 14.04.2026       //
+//  by Highpoint               last update: 11.05.2026       //
 //                                                           //
 //  Thanks for support by                                    //
 //  Jeroen Platenkamp, Bkram, Wötkylä, AmateurAudioDude      //
@@ -14,32 +14,32 @@
 
 
 (() => {
-const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 192000;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
-const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "Mikrofon (HD USB Audio Device)";    // Do not touch - this value is automatically updated via the config file
 const MPXTiltCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const VisualDelayMs = 250;    // Do not touch - this value is automatically updated via the config file
-const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const VisualDelayMs = 275;    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = -0.4;    // Do not touch - this value is automatically updated via the config file
 const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const MeterPilotScale = 400;    // Do not touch - this value is automatically updated via the config file
-const MeterRDSScale = 750;    // Do not touch - this value is automatically updated via the config file
-const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotScale = 116.857176;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSScale = 132.2072;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 4096;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
 const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
 const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
-const ScopeInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
-const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
-const MODULE_SEQUENCE = [1,2,5,0,3,4];    // Do not touch - this value is automatically updated via the config file
+const ScopeInputCalibration = 4;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2.3;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1.2;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [3,0,1,2,5,4];    // Do not touch - this value is automatically updated via the config file
 const CANVAS_SEQUENCE = [2,5,4];    // Do not touch - this value is automatically updated via the config file
 const MultipathMode = 0;    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
-const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
+const EnableSpectrumOnLoad = true;    // Do not touch - this value is automatically updated via the config file
 const EnableAnalyzerAdminMode = false;    // Do not touch - this value is automatically updated via the config file
 const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
 const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
@@ -53,11 +53,6 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
   const CONFIG = (window.MetricsMonitor && window.MetricsMonitor.Config) ? window.MetricsMonitor.Config : {};
   const HUB_KEY = "__MM_SIGNAL_ANALYZER_HUB__";
 
-  // These are the known Chart.js + chartjs-plugin-streaming race errors during destroy/rebuild/hide.
-  // We:
-  //  1) avoid calling update when Chart isn't alive
-  //  2) pause & stop streaming timers before destroy
-  //  3) suppress these specific console errors globally (without overriding window.onerror)
   const QUIET_ERROR_SUBSTRINGS = [
     "getDatasetMeta",
     "_setStyle",
@@ -82,7 +77,6 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
     if (!chart) return false;
     if (!chart.canvas || !chart.ctx) return false;
 
-    // Canvas removed from DOM? treat as not alive.
     if (typeof chart.canvas.isConnected === "boolean" && !chart.canvas.isConnected) return false;
 
     const ds = chart.data?.datasets;
@@ -91,19 +85,17 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
     return true;
   }
 
-  // Stop chartjs-plugin-streaming timers/RAF as best-effort (plugin internals differ by version).
+
   function stopStreamingTimers(chart) {
     if (!chart) return;
 
     try { chart.stop?.(); } catch {}
 
-    // Best-effort: pause realtime scale first
     try {
       const rt = chart.options?.scales?.x?.realtime;
       if (rt) rt.pause = true;
     } catch {}
 
-    // Best-effort: clear plugin timers if present
     try {
       const s =
         chart.$streaming ||
@@ -147,7 +139,6 @@ const MeterTiltCalibration = -900;    // Do not touch - this value is automatica
     } catch (e) {
       const msg = String(e && (e.message || e) || "");
       if (isQuietErrorMessage(msg)) return;
-      // eslint-disable-next-line no-console
       console.warn("[MetricsSignalAnalyzer] Chart update error:", e);
     }
   }

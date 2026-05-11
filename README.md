@@ -6,12 +6,12 @@ FMDX Webserver Monitor plugin for displaying RDS and RF information, volume, equ
 
 
 
-## v2.8
+## v2.8a
 
-- Added a new switchable waveform display for the oscilloscope mode 
-- Revised the waveform display for the spectrum analyzer
+- Shared hub: shared WebSocket hub, all three client modules delegate to window.MetricsMpxHub, one connection instead of three (reduce network bandwidth usage)
+- IdleShutdown: config option to end MPXCapture binary when idle, with heartbeat tracking, debounced SIGTERM, restart on demand, correct Linux process group kill
 
-Many thanks to Bojcha for the ideas and the code!
+Many thanks to AmateurAudioDude for these code adjustments!
 
 You can find the current manual here:
 https://highpoint.fmdx.org/manuals/MetricsMonitor-Documentation.html
@@ -174,6 +174,11 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### v2.8
+
+- Added a new switchable waveform display for the oscilloscope mode 
+- Revised the waveform display for the spectrum analyz
 
 ### v2.7
 
