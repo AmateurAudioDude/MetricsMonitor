@@ -45,67 +45,23 @@ const PeakColorFixed = "rgb(251, 174, 38)";
 const MeterTiltCalibration = -900;
 
 /////////////////////////////////////////////////////////////////
-// Shared WebSocket Hub (one connection for N renderers)
+// Shared WebSocket Hub (delegates to global singleton)
 /////////////////////////////////////////////////////////////////
-const currentURL = window.location;
-const PORT = currentURL.port || (currentURL.protocol === "https:" ? "443" : "80");
-const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
-const HOST = currentURL.hostname;
-const WS_URL = `${protocol}//${HOST}:${PORT}/data_plugins`;
-
-let ws = null;
-let wsCleaned = false;
-
-const MpxHub = (() => {
-  let reconnectTimer = null;
-  const listeners = new Set();
-
-  function connect() {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    try {
-      ws = new WebSocket(WS_URL);
-      ws.onmessage = (evt) => {
-        let msg;
-        try { msg = JSON.parse(evt.data); } catch { return; }
-        if (!msg || typeof msg !== "object" || msg.type !== "MPX") return;
-        listeners.forEach(fn => { try { fn(msg); } catch (e) {} });
-      };
-      ws.onclose = () => scheduleReconnect();
-      ws.onerror = () => scheduleReconnect();
-    } catch {
-      scheduleReconnect();
-    }
-  }
-
-  function scheduleReconnect() {
-    if (wsCleaned) { ws = null; wsCleaned = false; return; }
-    if (reconnectTimer) return;
-    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2500);
-  }
-
-  function subscribe(fn) {
+const MpxHub = {
+  subscribe(fn) {
     if (typeof fn !== "function") return () => {};
-    listeners.add(fn);
-    connect();
-    return () => listeners.delete(fn);
-  }
-
-  function send(data) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify(data)); } catch(e) {}
-    }
-  }
-
-  return { subscribe, connect, send };
-})();
+    const wrapper = (msg) => {
+      if (!msg || typeof msg !== "object" || msg.type !== "MPX") return;
+      fn(msg);
+    };
+    return window.MetricsMpxHub.subscribe(wrapper);
+  },
+  send: (data) => window.MetricsMpxHub.send(data),
+  connect: () => window.MetricsMpxHub.reopen(),
+};
 
 function closeMpxSocket() {
-  if (ws) {
-    try { ws.close(); wsCleaned = true; } catch (e) {
-      console.error("[MetricsScope] Error closing WebSocket:", e);
-    }
-    ws = null;
-  }
+  // Connection is shared via MetricsMpxHub — no-op here
 }
 
 /////////////////////////////////////////////////////////////////

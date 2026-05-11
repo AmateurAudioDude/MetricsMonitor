@@ -13,39 +13,39 @@
 ///////////////////////////////////////////////////////////////
 
 (() => {
-const sampleRate = 192000;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
-const MPXInputCard = "Mikrofon (HD USB Audio Device)";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
 const MPXTiltCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const VisualDelayMs = 275;    // Do not touch - this value is automatically updated via the config file
-const MeterInputCalibration = -0.4;    // Do not touch - this value is automatically updated via the config file
+const VisualDelayMs = 250;    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const MeterPilotScale = 116.857176;    // Do not touch - this value is automatically updated via the config file
-const MeterRDSScale = 132.2072;    // Do not touch - this value is automatically updated via the config file
-const fftSize = 4096;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotScale = 400;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSScale = 750;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
 const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
 const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
-const ScopeInputCalibration = 4;    // Do not touch - this value is automatically updated via the config file
-const StereoBoost = 2.3;    // Do not touch - this value is automatically updated via the config file
-const AudioMeterBoost = 1.2;    // Do not touch - this value is automatically updated via the config file
-const MODULE_SEQUENCE = [3,0,1,2,5,4];    // Do not touch - this value is automatically updated via the config file
+const ScopeInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,5,0,3,4];    // Do not touch - this value is automatically updated via the config file
 const CANVAS_SEQUENCE = [2,5,4];    // Do not touch - this value is automatically updated via the config file
 const MultipathMode = 0;    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
-const EnableSpectrumOnLoad = true;    // Do not touch - this value is automatically updated via the config file
+const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
 const EnableAnalyzerAdminMode = false;    // Do not touch - this value is automatically updated via the config file
 const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
 const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
 const MeterColorDanger = "rgb(255, 0, 0)";    // Do not touch - this value is automatically updated via the config file
 const PeakMode = "dynamic";    // Do not touch - this value is automatically updated via the config file
 const PeakColorFixed = "rgb(251, 174, 38)";    // Do not touch - this value is automatically updated via the config file
-
+
 const MeterTiltCalibration = -900;           // Auto-updated via config file
 
     // Debug flags
@@ -130,10 +130,10 @@ const MeterTiltCalibration = -900;           // Auto-updated via config file
     let smoothedLevelL = 0;
     let smoothedLevelR = 0;
 
-    // WebSocket
-    let mpxSocket = null;
-    let wsReconnectTimer = null;
-    const WS_RECONNECT_MS = 2500;
+    // WebSocket (shared hub)
+    let metersHeartbeatInterval = null;
+    let metersActive = false; // set true by setActive() when meters module is visible
+    let metersHubUnsubscribe = null;
 
     // ==========================================================
     // Color helpers
@@ -841,45 +841,14 @@ function setPeakSegment(meterEl, peakPercent, meterId) {
     // ==========================================================
     // WebSocket setup with auto-reconnect
     // ==========================================================
-    function scheduleWsReconnect() {
-        if (wsReconnectTimer) return;
-        wsReconnectTimer = setTimeout(() => {
-            wsReconnectTimer = null;
-            setupMetricsWebSocket(true);
-        }, WS_RECONNECT_MS);
-    }
+    // WebSocket setup (shared hub)
+    // ==========================================================
+    function setupMetricsWebSocket() {
+        if (metersHubUnsubscribe) return;
 
-    function setupMetricsWebSocket(forceReconnect = false) {
-        const currentURL = window.location;
-        const webserverPort = currentURL.port || (currentURL.protocol === "https:" ? "443" : "80");
-        const protocol = currentURL.protocol === "https:" ? "wss:" : "ws:";
-        const webserverURL = currentURL.hostname;
-        const websocketURL = `${protocol}//${webserverURL}:${webserverPort}/data_plugins`;
-
-        if (!forceReconnect && mpxSocket && (mpxSocket.readyState === WebSocket.OPEN || mpxSocket.readyState === WebSocket.CONNECTING)) {
-            return;
-        }
-
-        if (mpxSocket) {
-            try { mpxSocket.close(); } catch (e) {}
-            mpxSocket = null;
-        }
-
-        const socket = new WebSocket(websocketURL);
-        mpxSocket = socket;
-
-        socket.onmessage = (event) => {
-            let message;
-            try { message = JSON.parse(event.data); } catch { return; }
-
-            if (Array.isArray(message)) {
-                handleMpxArray(message);
-                return;
-            }
-
+        metersHubUnsubscribe = window.MetricsMpxHub.subscribe((message) => {
             if (!message || typeof message !== "object") return;
             const type = message.type ? String(message.type).toLowerCase() : "";
-
             if (type === "mpx") {
                 if (typeof message.peak === "number") {
                     mpxPeakVal = message.peak;
@@ -887,31 +856,18 @@ function setPeakSegment(meterEl, peakPercent, meterId) {
                     rdsPeakVal = (typeof message.rdsKHz === "number") ? message.rdsKHz : 0;
                 }
                 handleMpxArray(message.value);
-                return;
             }
-        };
+        });
 
-        socket.onclose = () => {
-            mpxSocket = null;
-            scheduleWsReconnect();
-        };
-
-        socket.onerror = () => {
-            scheduleWsReconnect();
-        };
+        if (metersHeartbeatInterval) clearInterval(metersHeartbeatInterval);
+        metersHeartbeatInterval = setInterval(() => {
+            if (metersActive) window.MetricsMpxHub.send({ type: "meters_heartbeat" });
+        }, 3000);
     }
 
     function closeMetricsWebSocket() {
-        if (wsReconnectTimer) {
-            clearTimeout(wsReconnectTimer);
-            wsReconnectTimer = null;
-        }
-        if (mpxSocket) {
-            try { mpxSocket.close(); } catch (e) {
-                console.error("[MetricsMeters] Error closing WebSocket:", e);
-            }
-            mpxSocket = null;
-        }
+        if (metersHeartbeatInterval) { clearInterval(metersHeartbeatInterval); metersHeartbeatInterval = null; }
+        if (metersHubUnsubscribe) { metersHubUnsubscribe(); metersHubUnsubscribe = null; }
     }
 
     // ==========================================================
@@ -1001,6 +957,11 @@ function setPeakSegment(meterEl, peakPercent, meterId) {
         initMeters,
         cleanup: closeMetricsWebSocket,
         createWebSocket: setupMetricsWebSocket,
+
+        setActive(active) {
+            metersActive = !!active;
+            if (metersActive) window.MetricsMpxHub.send({ type: "meters_heartbeat" });
+        },
         startAnimation: () => {
             if(!stereoAnimationId) startStereoAnimation();
         },

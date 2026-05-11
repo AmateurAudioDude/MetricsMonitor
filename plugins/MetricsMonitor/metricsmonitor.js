@@ -12,33 +12,83 @@
 //                                                             //
 /////////////////////////////////////////////////////////////////
 
+// Shared WebSocket hub, single connection used by all MetricsMonitor modules.
+// Defined here so it exists before any module script executes.
+window.MetricsMpxHub = (function() {
+  var u = window.location;
+  var port = u.port || (u.protocol === "https:" ? "443" : "80");
+  var proto = u.protocol === "https:" ? "wss:" : "ws:";
+  var WS_URL = proto + "//" + u.hostname + ":" + port + "/data_plugins";
+
+  var ws = null;
+  var reconnectTimer = null;
+  var closing = false;
+  var listeners = [];
+
+  function connect() {
+    if (closing) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    try {
+      ws = new WebSocket(WS_URL);
+      ws.onmessage = function(evt) {
+        var msg;
+        try { msg = JSON.parse(evt.data); } catch(e) { return; }
+        if (!msg || typeof msg !== "object") return;
+        for (var i = 0; i < listeners.length; i++) { try { listeners[i](msg); } catch(e) {} }
+      };
+      ws.onclose = function() { ws = null; if (!closing) reconnectTimer = setTimeout(connect, 2500); };
+      ws.onerror = function() {};
+    } catch(e) { reconnectTimer = setTimeout(connect, 2500); }
+  }
+
+  connect();
+
+  return {
+    subscribe: function(fn) {
+      if (typeof fn !== "function") return function() {};
+      listeners.push(fn);
+      connect();
+      return function() { var i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); };
+    },
+    send: function(data) {
+      if (ws && ws.readyState === WebSocket.OPEN) try { ws.send(JSON.stringify(data)); } catch(e) {}
+    },
+    close: function() {
+      closing = true;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+    },
+    reopen: function() { closing = false; connect(); }
+  };
+}());
+
 (() => {
-const sampleRate = 192000;    // Do not touch - this value is automatically updated via the config file
-const MPXmode = "auto";    // Do not touch - this value is automatically updated via the config file
+const sampleRate = 48000;    // Do not touch - this value is automatically updated via the config file
+const MPXmode = "off";    // Do not touch - this value is automatically updated via the config file
 const MPXStereoDecoder = "off";    // Do not touch - this value is automatically updated via the config file
-const MPXInputCard = "Mikrofon (HD USB Audio Device)";    // Do not touch - this value is automatically updated via the config file
+const MPXInputCard = "";    // Do not touch - this value is automatically updated via the config file
 const MPXTiltCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const VisualDelayMs = 275;    // Do not touch - this value is automatically updated via the config file
-const MeterInputCalibration = -0.4;    // Do not touch - this value is automatically updated via the config file
+const VisualDelayMs = 250;    // Do not touch - this value is automatically updated via the config file
+const MeterInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterPilotCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterMPXCalibration = 0;    // Do not touch - this value is automatically updated via the config file
 const MeterRDSCalibration = 0;    // Do not touch - this value is automatically updated via the config file
-const MeterPilotScale = 116.857176;    // Do not touch - this value is automatically updated via the config file
-const MeterRDSScale = 132.2072;    // Do not touch - this value is automatically updated via the config file
-const fftSize = 4096;    // Do not touch - this value is automatically updated via the config file
+const MeterPilotScale = 400;    // Do not touch - this value is automatically updated via the config file
+const MeterRDSScale = 750;    // Do not touch - this value is automatically updated via the config file
+const fftSize = 512;    // Do not touch - this value is automatically updated via the config file
 const SpectrumAttackLevel = 3;    // Do not touch - this value is automatically updated via the config file
 const SpectrumDecayLevel = 15;    // Do not touch - this value is automatically updated via the config file
 const SpectrumSendInterval = 30;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYOffset = -40;    // Do not touch - this value is automatically updated via the config file
 const SpectrumYDynamics = 2;    // Do not touch - this value is automatically updated via the config file
-const ScopeInputCalibration = 4;    // Do not touch - this value is automatically updated via the config file
-const StereoBoost = 2.3;    // Do not touch - this value is automatically updated via the config file
-const AudioMeterBoost = 1.2;    // Do not touch - this value is automatically updated via the config file
-const MODULE_SEQUENCE = [3,0,1,2,5,4];    // Do not touch - this value is automatically updated via the config file
+const ScopeInputCalibration = 0;    // Do not touch - this value is automatically updated via the config file
+const StereoBoost = 2;    // Do not touch - this value is automatically updated via the config file
+const AudioMeterBoost = 1;    // Do not touch - this value is automatically updated via the config file
+const MODULE_SEQUENCE = [1,2,5,0,3,4];    // Do not touch - this value is automatically updated via the config file
 const CANVAS_SEQUENCE = [2,5,4];    // Do not touch - this value is automatically updated via the config file
 const MultipathMode = 0;    // Do not touch - this value is automatically updated via the config file
 const LockVolumeSlider = true;    // Do not touch - this value is automatically updated via the config file
-const EnableSpectrumOnLoad = true;    // Do not touch - this value is automatically updated via the config file
+const EnableSpectrumOnLoad = false;    // Do not touch - this value is automatically updated via the config file
 const EnableAnalyzerAdminMode = false;    // Do not touch - this value is automatically updated via the config file
 const MeterColorSafe = "rgb(0, 255, 0)";    // Do not touch - this value is automatically updated via the config file
 const MeterColorWarning = "rgb(255, 255,0)";    // Do not touch - this value is automatically updated via the config file
@@ -336,6 +386,10 @@ function syncTextWebSocketMode(isInitial) {
   const canvasIsMPX = ((activeCanvasMode === 2 || activeCanvasMode === 5) && isCanvasVisible);
   const needMPX = moduleIsMPX || canvasIsMPX;
   const restoreNormalCmd = () => (lastAudioMonoState === true ? "B1" : "B0");
+
+  if (window.MetricsMeters && typeof window.MetricsMeters.setActive === "function") {
+    window.MetricsMeters.setActive(moduleIsMPX);
+  }
 
   mmLog("log", `syncTextWebSocketMode(init=${!!isInitial}, MPXmode=${CONFIG.MPXmode}, mode=${mode}, canvas=${activeCanvasMode}, needMPX=${needMPX}, lastSent=${lastSentTextMode}, lastMono=${lastAudioMonoState})`);
 
